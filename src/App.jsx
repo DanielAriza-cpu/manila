@@ -543,13 +543,17 @@ export default function App(){
 
       const g=S.g;const syn=syRef.current;const drone=droneRef.current;
       if(g&&!g.stopA)drone.modulate(g);
-      if(g&&!g.stopA&&S.synOn&&!S.audioSilenced){
+      // Solo activa synth si hay movimiento real (mt > 0.08) — evita notas fantasma en quietud
+      const hasMotion=(g?.mt||0)>0.08;
+      if(g&&!g.stopA&&S.synOn&&!S.audioSilenced&&hasMotion){
         if(g.bUp){const n=syn.noteAt(g.rP,3,4);syn.play("chord",n,Math.min(1,g.hD*0.8),0.3);S.curNote=n?m2n(n.midi):"—";}else syn.rel("chord",0.8);
         if(g.sq>0.2)syn.play("sub",syn.noteAt(0.1,1,2),g.sq,0.5);else syn.rel("sub",1);
         if(g.rAct&&!g.bUp){const n=syn.noteAt(g.rP);if(g.rPlk&&performance.now()-plkTRef.current>100){syn.plk("pluck",n,Math.min(1,g.spd.r/3));plkTRef.current=performance.now();}else syn.play("melody",n,0.3+g.spd.r*0.2,0.08);S.curNote=n?m2n(n.midi):"—";if(g.hD>1.2)syn.arpTk(0.5);}
         else if(!g.bUp){syn.rel("melody",0.3);}
         if(g.lExt)syn.play("bass",syn.noteAt(g.lP,2,3),0.5,0.1);else syn.rel("bass",0.4);
       }
+      // Si no hay movimiento, libera todas las voces suavemente
+      if(g&&!g.stopA&&!hasMotion){syn.rel("melody",0.5);syn.rel("lead",0.5);syn.rel("bass",0.5);syn.rel("chord",0.8);syn.rel("sub",0.8);S.curNote="—";}
       if(g?.stopA&&!S.stopped){S.stopped=true;syn.relAll();drone.stop();}
       if(!g?.stopA&&S.stopped){S.stopped=false;drone.resume();}
 
@@ -641,13 +645,18 @@ export default function App(){
       if(g?.lm)drawFluid(ctx,g.lm,W,H,palette.entityColor,S.entityOpacity,t,g.mt||0);
       if(S.shadowOn&&shRef.current.buf.length>3){shRef.current.mir=S.shadowMirror;shRef.current.rnd=S.shadowRandom;shRef.current.df=S.shadowDelay;drawGhost(ctx,shRef.current,W,H,palette.shadowColor,S.shadowOpacity,t);}
 
-      // Segunda proyección
+      // Segunda proyección — canvas oculto → copia al popup
       if(S.ghostProjectionOn&&ghostCanvasRef.current){
         try{
-          const gc=ghostCanvasRef.current.getContext("2d");
+          // Dibujar en canvas oculto primero
+          if(!S.ghostOffscreen){S.ghostOffscreen=document.createElement("canvas");S.ghostOffscreen.width=960;S.ghostOffscreen.height=540;}
+          const goc=S.ghostOffscreen.getContext("2d");
           const bgVid=S.ghostBgVideoIdx>=0?vRefs[S.ghostBgVideoIdx]?.current:null;
-          drawGhostWorld(gc,W,H,shRef.current,S.arc,t,particlesRef.current,palette,bgVid,S.ghostWorldOp);
-        }catch(e){S.ghostProjectionOn=false;}
+          drawGhostWorld(goc,960,540,shRef.current,S.arc,t,particlesRef.current,palette,bgVid,S.ghostWorldOp);
+          // Copiar al popup
+          const gc=ghostCanvasRef.current.getContext("2d");
+          gc.drawImage(S.ghostOffscreen,0,0);
+        }catch(e){console.warn("ghost projection:",e);}
       }
 
       ctx.globalAlpha=1;ctx.globalCompositeOperation="source-over";
