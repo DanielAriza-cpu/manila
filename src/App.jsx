@@ -17,13 +17,19 @@ const NV=8;
 const ARC_PALETTES={
   deriva:{primary:"#3B82F6",secondary:"#6366F1",textColor:"#93C5FD",
     shadowColor:"#F43F5E",entityColor:"#3B82F6",
-    scale:"Menor Natural",key:"A",bpm:90,label:"DERIVA"},
+    scale:"Menor Natural",key:"A",bpm:90,label:"DERIVA",
+    // Sintetizador: cuerdas pulsadas, delay rítmico, seco
+    synChar:{dl:0.45,rv:0.1,octLo:3,octHi:5,melodyAtk:0.01,bassAtk:0.08,chordAtk:0.2}},
   kenopsia:{primary:"#94A3B8",secondary:"#CBD5E1",textColor:"#E2E8F0",
     shadowColor:"#CBD5E1",entityColor:"#94A3B8",
-    scale:"Japonesa",key:"D",bpm:60,label:"KENOPSIA"},
+    scale:"Japonesa",key:"D",bpm:60,label:"KENOPSIA",
+    // Sintetizador: pad lentísimo, reverb máximo, sin delay
+    synChar:{dl:0.02,rv:0.78,octLo:2,octHi:4,melodyAtk:0.8,bassAtk:1.2,chordAtk:1.5}},
   apertura:{primary:"#F59E0B",secondary:"#10B981",textColor:"#FDE68A",
     shadowColor:"#F59E0B",entityColor:"#10B981",
-    scale:"Pentatónica Menor",key:"C",bpm:130,label:"APERTURA"},
+    scale:"Pentatónica Menor",key:"C",bpm:130,label:"APERTURA",
+    // Sintetizador: percusivo, corto, delay sincopado
+    synChar:{dl:0.18,rv:0.25,octLo:4,octHi:6,melodyAtk:0.005,bassAtk:0.02,chordAtk:0.05}},
 };
 
 // ── Frases poéticas de "Viajar" ───────────────────────────────────────────
@@ -52,46 +58,140 @@ const VIAJAR_PHRASES=[
 ];
 
 // ── Partícula de texto ────────────────────────────────────────────────────
+// Estilos de aparición del texto — se asignan aleatoriamente
+const TEXT_STYLES=["typewriter","explode","particles","glitch","vertical"];
+
 class TextParticle{
   constructor(text,x,y,color,arc){
     this.text=text;this.lines=text.split("\n");
     this.x=x;this.y=y;this.color=color;this.arc=arc;
-    this.vx=(Math.random()-0.5)*0.25;this.vy=-0.08-Math.random()*0.06;
+    this.vx=(Math.random()-0.5)*0.2;this.vy=-0.06-Math.random()*0.05;
     this.alpha=0;this.life=0;
-    this.maxLife=200+Math.random()*100;
-    this.size=text.length>18?20:text.length>10?28:40;
+    this.maxLife=220+Math.random()*120;
+    this.size=text.length>18?19:text.length>10?26:38;
+    // Estilo aleatorio
+    this.style=TEXT_STYLES[Math.floor(Math.random()*TEXT_STYLES.length)];
+    this.letters=text.replace(/\n/g," ").split("");
+    // Estado por letra para typewriter y explode
+    this.letterState=this.letters.map((_,i)=>({
+      alpha:0,
+      ox:(Math.random()-0.5)*120, // offset inicial para explode
+      oy:(Math.random()-0.5)*120,
+      delay:i*4,                   // retraso para typewriter
+    }));
+    // Partículas para el modo arena
+    this.pts=this.letters.map((_,i)=>Array.from({length:6},()=>({
+      x:0,y:0,vx:(Math.random()-0.5)*2,vy:(Math.random()-0.5)*2,a:Math.random()
+    })));
+    this.glitchOff=0;
     this.scattered=false;
-    this.letterAlphas=text.replace(/\n/g,"").split("").map(()=>1);
   }
   update(motion){
     this.life++;
-    if(this.life<25)this.alpha=this.life/25;
-    else if(this.life>this.maxLife-40)this.alpha=Math.max(0,(this.maxLife-this.life)/40);
+    if(this.life<20)this.alpha=this.life/20;
+    else if(this.life>this.maxLife-50)this.alpha=Math.max(0,(this.maxLife-this.life)/50);
     else this.alpha=1;
-    if(motion>0.35&&!this.scattered){this.scattered=true;this.letterAlphas=this.letterAlphas.map(()=>Math.random());}
-    else if(motion<0.12){this.scattered=false;this.letterAlphas=this.letterAlphas.map(a=>Math.min(1,a+0.04));}
+    // Dispersión por movimiento (todos los estilos)
+    if(motion>0.35)this.scattered=true;
+    else if(motion<0.1)this.scattered=false;
+    // Glitch offset aleatorio
+    if(this.style==="glitch")this.glitchOff=Math.random()>0.85?(Math.random()-0.5)*12:this.glitchOff*0.8;
     this.x+=this.vx;this.y+=this.vy;
   }
   isDead(){return this.life>=this.maxLife;}
   draw(ctx){
     if(this.alpha<=0)return;
     ctx.save();
-    ctx.font=`200 ${this.size}px 'Segoe UI',system-ui,sans-serif`;
     ctx.textAlign="center";
-    if(!this.scattered){
-      ctx.globalAlpha=this.alpha;ctx.fillStyle=this.color;
-      this.lines.forEach((ln,i)=>ctx.fillText(ln.toUpperCase(),this.x,this.y+i*this.size*1.2));
-      if(this.arc==="kenopsia"){ctx.globalAlpha=this.alpha*0.12;ctx.fillText(this.lines[0].toUpperCase(),this.x+3,this.y+2);}
+    const s=this.style;
+    const letters=this.letters;
+    const sz=this.size;
+    const charW=sz*0.58;
+    const totalW=letters.length*charW;
+    const startX=this.x-totalW/2;
+
+    // Color con variación por estilo
+    const col=s==="glitch"?"#00FFCC":s==="particles"?"#FFFFFF":this.color;
+
+    if(s==="typewriter"){
+      // Letras aparecen una a una con cursor
+      ctx.font=`300 ${sz}px 'Segoe UI',monospace`;
+      letters.forEach((ch,i)=>{
+        const st=this.letterState[i];
+        if(this.life>st.delay)st.alpha=Math.min(1,st.alpha+0.15);
+        ctx.globalAlpha=this.alpha*st.alpha;ctx.fillStyle=col;
+        ctx.fillText(ch.toUpperCase(),startX+i*charW+charW/2,this.y);
+        // Cursor parpadeante después de la última letra visible
+        if(i===Math.min(letters.length-1,Math.floor(this.life/4))&&Math.floor(this.life/8)%2===0){
+          ctx.globalAlpha=this.alpha*0.7;ctx.fillRect(startX+(i+1)*charW,this.y-sz*0.8,2,sz);
+        }
+      });
+    }else if(s==="explode"){
+      // Letras vienen de posiciones dispersas y convergen
+      ctx.font=`200 ${sz}px 'Segoe UI',sans-serif`;
+      const prog=Math.min(1,this.life/60);
+      letters.forEach((ch,i)=>{
+        const st=this.letterState[i];
+        const tx=startX+i*charW+charW/2;
+        const ty=this.y;
+        const cx2=tx+st.ox*(1-prog);
+        const cy2=ty+st.oy*(1-prog);
+        ctx.globalAlpha=this.alpha*prog;ctx.fillStyle=col;
+        ctx.fillText(ch.toUpperCase(),cx2,cy2);
+      });
+    }else if(s==="particles"){
+      // Arena: cada letra es un grupo de puntos que se organizan
+      const prog=Math.min(1,this.life/80);
+      ctx.font=`200 ${sz}px 'Segoe UI',sans-serif`;
+      if(prog>0.7){
+        // Cuando están organizadas, mostrar texto normal
+        ctx.globalAlpha=this.alpha*(prog-0.7)/0.3;ctx.fillStyle=col;
+        letters.forEach((ch,i)=>ctx.fillText(ch.toUpperCase(),startX+i*charW+charW/2,this.y));
+      }
+      // Puntos de arena
+      letters.forEach((ch,i)=>{
+        const tx=startX+i*charW+charW/2;
+        this.pts[i].forEach(pt=>{
+          pt.x=pt.x*(1-prog)+tx*prog+pt.vx*(1-prog)*20;
+          pt.y=pt.y*(1-prog)+this.y*prog+pt.vy*(1-prog)*20;
+          ctx.globalAlpha=this.alpha*(1-prog*0.7)*pt.a;
+          ctx.fillStyle=col;ctx.beginPath();
+          ctx.arc(pt.x,pt.y,1+Math.random()*1.5,0,Math.PI*2);ctx.fill();
+        });
+      });
+    }else if(s==="glitch"){
+      // Glitch: aparece con ruido cromático
+      ctx.font=`bold ${sz}px monospace`;
+      // Sombra roja desplazada
+      ctx.globalAlpha=this.alpha*0.5;ctx.fillStyle="#FF0055";
+      ctx.fillText(this.text.replace(/\n/g," ").toUpperCase(),this.x+this.glitchOff*2,this.y+2);
+      // Sombra cyan
+      ctx.fillStyle="#00FFFF";
+      ctx.fillText(this.text.replace(/\n/g," ").toUpperCase(),this.x-this.glitchOff,this.y-1);
+      // Texto principal
+      ctx.globalAlpha=this.alpha;ctx.fillStyle=col;
+      ctx.fillText(this.text.replace(/\n/g," ").toUpperCase(),this.x+this.glitchOff*0.5,this.y);
+      // Línea de scanline aleatoria
+      if(Math.random()>0.7){ctx.globalAlpha=this.alpha*0.3;ctx.fillStyle="#fff";ctx.fillRect(this.x-totalW/2,this.y-sz+Math.random()*sz,totalW,1);}
     }else{
-      // Letras dispersas individualmente
-      const allLetters=this.text.replace(/\n/g," ").split("");
-      let lx=this.x-allLetters.length*this.size*0.28;
-      allLetters.forEach((ch,i)=>{
-        const la=this.letterAlphas[i]||0;
-        ctx.globalAlpha=this.alpha*la;ctx.fillStyle=this.color;
-        const scatter=(la-0.5)*18;
-        ctx.fillText(ch.toUpperCase(),lx+scatter*(i%2===0?1:-1),this.y+scatter*0.4);
-        lx+=this.size*0.58;
+      // vertical: letras caen desde arriba una a una
+      ctx.font=`200 ${sz}px 'Segoe UI',sans-serif`;
+      letters.forEach((ch,i)=>{
+        const st=this.letterState[i];
+        if(this.life>st.delay)st.alpha=Math.min(1,st.alpha+0.08);
+        const dropY=this.y-sz*(1-st.alpha)*3;
+        ctx.globalAlpha=this.alpha*st.alpha;ctx.fillStyle=col;
+        ctx.fillText(ch.toUpperCase(),startX+i*charW+charW/2,dropY);
+      });
+    }
+
+    // Dispersión universal por movimiento fuerte
+    if(this.scattered){
+      ctx.font=`200 ${sz*0.7}px 'Segoe UI',sans-serif`;
+      letters.forEach((ch,i)=>{
+        const scatter=(Math.random()-0.5)*30;
+        ctx.globalAlpha=this.alpha*Math.random()*0.5;ctx.fillStyle=col;
+        ctx.fillText(ch.toUpperCase(),startX+i*charW+charW/2+scatter,this.y+scatter*0.5);
       });
     }
     ctx.restore();
@@ -421,6 +521,7 @@ export default function App(){
     layers:Array.from({length:NV},()=>({ld:false,nm:"",op:1,bl:"screen",vis:true})),
     body:{vis:true,op:0.8,bl:"screen"},
     synOn:true,synVol:0.7,synDl:0.25,synRv:0.2,synKey:"C",synScale:"Pentatónica Menor",
+    melodyAtk:0.08,bassAtk:0.08,chordAtk:0.3,
     g:null,vAct:Array(NV).fill(false),vOp:Array(NV).fill(0),vManual:{},
     stopped:false,audioSilenced:false,curNote:"—",dbg:"init",poseCount:0,
     dancer2On:false,dancer2Color:"#F59E0B",dancer2:null,
@@ -451,6 +552,14 @@ export default function App(){
     S.arc=arcId;S.entityColor=p.entityColor;S.shadowColor=p.shadowColor;
     syn.chS(p.scale);syn.chK(p.key);syn.arpBPM=p.bpm;
     S.synKey=p.key;S.synScale=p.scale;
+    // Aplicar carácter sonoro del arco
+    if(p.synChar){
+      syn.setDl(p.synChar.dl);syn.setRv(p.synChar.rv);
+      syn.octLo=p.synChar.octLo;syn.octHi=p.synChar.octHi;
+      // Guardar ataques para usarlos en el render loop
+      S.melodyAtk=p.synChar.melodyAtk;S.bassAtk=p.synChar.bassAtk;S.chordAtk=p.synChar.chordAtk;
+      S.synDl=p.synChar.dl;S.synRv=p.synChar.rv;
+    }
     droneRef.current.setArc(arcId);
     particlesRef.current=[];S.phraseTimer=0;S.lastPhrase="";
   };
@@ -484,7 +593,28 @@ export default function App(){
 
   const listCams=async()=>{try{const d=await navigator.mediaDevices.enumerateDevices();setCameras(d.filter(x=>x.kind==="videoinput"));}catch(e){}};
   const switchCam=async(id)=>{try{if(streamRef.current)streamRef.current.getTracks().forEach(t=>t.stop());const c={video:{width:{ideal:640},height:{ideal:480}}};if(id)c.video.deviceId={exact:id};else c.video.facingMode="user";const s=await navigator.mediaDevices.getUserMedia(c);streamRef.current=s;if(wcRef.current){wcRef.current.srcObject=s;wcRef.current.muted=true;wcRef.current.play().catch(()=>{});}if(pvRef.current){pvRef.current.srcObject=s;pvRef.current.muted=true;pvRef.current.play().catch(()=>{});}setCamId(id||"");await listCams();}catch(e){}};
-  const startRec=()=>{const c=outRef.current;if(!c)return;const st=c.captureStream(30);const mr=new MediaRecorder(st,{mimeType:"video/webm",videoBitsPerSecond:4e6});recChunks.current=[];mr.ondataavailable=e=>{if(e.data.size>0)recChunks.current.push(e.data);};mr.onstop=()=>{const b=new Blob(recChunks.current,{type:"video/webm"});const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download=`korpsound-${Date.now()}.webm`;a.click();};mr.start(100);recRef.current=mr;setRecording(true);setRecTime(0);recTimer.current=setInterval(()=>setRecTime(t=>t+1),1000);};
+  const startRec=()=>{
+    const c=outRef.current;if(!c)return;
+    const videoStream=c.captureStream(30);
+    // Capturar audio del Web Audio API
+    try{
+      const syn=syRef.current;
+      if(syn.c&&syn.m){
+        const audioDest=syn.c.createMediaStreamDestination();
+        syn.m.connect(audioDest);
+        // También conectar el drone
+        if(droneRef.current?.masterG)droneRef.current.masterG.connect(audioDest);
+        const audioTrack=audioDest.stream.getAudioTracks()[0];
+        if(audioTrack)videoStream.addTrack(audioTrack);
+      }
+    }catch(e){console.warn("audio capture:",e);}
+    const mr=new MediaRecorder(videoStream,{mimeType:"video/webm",videoBitsPerSecond:4e6});
+    recChunks.current=[];
+    mr.ondataavailable=e=>{if(e.data.size>0)recChunks.current.push(e.data);};
+    mr.onstop=()=>{const b=new Blob(recChunks.current,{type:"video/webm"});const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download=`korpsound-${Date.now()}.webm`;a.click();};
+    mr.start(100);recRef.current=mr;setRecording(true);setRecTime(0);
+    recTimer.current=setInterval(()=>setRecTime(t=>t+1),1000);
+  };
   const stopRec=()=>{if(recRef.current?.state==="recording")recRef.current.stop();recRef.current=null;setRecording(false);clearInterval(recTimer.current);};
   const loadVid=(file,i)=>{const r=vRefs[i];if(r?.current){r.current.src=URL.createObjectURL(file);r.current.loop=true;r.current.muted=true;r.current.pause();S.layers[i].ld=true;S.layers[i].nm=file.name;tk();}};
 
@@ -561,11 +691,11 @@ export default function App(){
       // Solo activa synth si hay movimiento real (mt > 0.08) — evita notas fantasma en quietud
       const hasMotion=(g?.mt||0)>0.08;
       if(g&&!g.stopA&&S.synOn&&!S.audioSilenced&&hasMotion){
-        if(g.bUp){const n=syn.noteAt(g.rP,3,4);syn.play("chord",n,Math.min(1,g.hD*0.8),0.3);S.curNote=n?m2n(n.midi):"—";}else syn.rel("chord",0.8);
-        if(g.sq>0.2)syn.play("sub",syn.noteAt(0.1,1,2),g.sq,0.5);else syn.rel("sub",1);
-        if(g.rAct&&!g.bUp){const n=syn.noteAt(g.rP);if(g.rPlk&&performance.now()-plkTRef.current>100){syn.plk("pluck",n,Math.min(1,g.spd.r/3));plkTRef.current=performance.now();}else syn.play("melody",n,0.3+g.spd.r*0.2,0.08);S.curNote=n?m2n(n.midi):"—";if(g.hD>1.2)syn.arpTk(0.5);}
-        else if(!g.bUp){syn.rel("melody",0.3);}
-        if(g.lExt)syn.play("bass",syn.noteAt(g.lP,2,3),0.5,0.1);else syn.rel("bass",0.4);
+        if(g.bUp){const n=syn.noteAt(g.rP,3,4);syn.play("chord",n,Math.min(1,g.hD*0.8),S.chordAtk);S.curNote=n?m2n(n.midi):"—";}else syn.rel("chord",0.8);
+        if(g.sq>0.2)syn.play("sub",syn.noteAt(0.1,1,2),g.sq,S.bassAtk);else syn.rel("sub",1);
+        if(g.rAct&&!g.bUp){const n=syn.noteAt(g.rP);if(g.rPlk&&performance.now()-plkTRef.current>100){syn.plk("pluck",n,Math.min(1,g.spd.r/3));plkTRef.current=performance.now();}else syn.play("melody",n,0.3+g.spd.r*0.2,S.melodyAtk);S.curNote=n?m2n(n.midi):"—";if(g.hD>1.2)syn.arpTk(0.5);}
+        else if(!g.bUp){syn.rel("melody",0.4);}
+        if(g.lExt)syn.play("bass",syn.noteAt(g.lP,2,3),0.5,S.bassAtk);else syn.rel("bass",0.5);
       }
       // Si no hay movimiento, libera todas las voces suavemente
       if(g&&!g.stopA&&!hasMotion){syn.rel("melody",0.5);syn.rel("lead",0.5);syn.rel("bass",0.5);syn.rel("chord",0.8);syn.rel("sub",0.8);S.curNote="—";}
