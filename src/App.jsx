@@ -295,30 +295,34 @@ function drawIcosahedron(ctx,lm,W,H,palette,t,motion){
     const fov=3/(3+z2*0.3);
     return{px:cx+x2*baseR*fov,py:cy+y1*baseR*fov*0.6,z:z2};
   };
-  // Deformación: keypoints empujan vértices cercanos
   const projected=ICO_V.map(v=>{
     const p=project(v);
     let dx=0,dy=0;
     pts.forEach(pt=>{const d=Math.sqrt((p.px-pt.x)**2+(p.py-pt.y)**2);if(d<90){const f=(90-d)/90;dx+=(p.px-pt.x)*f*0.5;dy+=(p.py-pt.y)*f*0.5;}});
     return{px:p.px+dx,py:p.py+dy,z:p.z};
   });
-  const hr=palette.primary.replace('#','');
-  const cr=parseInt(hr.substring(0,2),16),cg=parseInt(hr.substring(2,4),16),cb=parseInt(hr.substring(4,6),16);
+  // Color propio del icosaedro: dorado/blanco independiente del arco
   ctx.save();
   const edges=new Set();
   ICO_F.forEach(([a,b,c])=>[[a,b],[b,c],[a,c]].forEach(([i,j])=>{
     const key=Math.min(i,j)+"-"+Math.max(i,j);
     if(edges.has(key))return;edges.add(key);
     const va=projected[i],vb=projected[j];
-    const op=Math.max(0.04,0.18+Math.min(va.z,vb.z)*0.1);
-    ctx.strokeStyle=`rgba(${cr},${cg},${cb},${op})`;
-    ctx.lineWidth=0.5+Math.max(0,(va.z+vb.z)*0.5)*0.4;
+    const zAvg=(va.z+vb.z)/2;
+    const op=Math.max(0.08,0.4+zAvg*0.25);
+    // Aristas: color dorado
+    ctx.strokeStyle=`rgba(255,220,100,${op})`;
+    ctx.lineWidth=0.8+Math.max(0,zAvg)*0.8+motion*0.5;
     ctx.beginPath();ctx.moveTo(va.px,va.py);ctx.lineTo(vb.px,vb.py);ctx.stroke();
   }));
-  projected.forEach((v,i)=>{
-    const op=Math.max(0.05,0.3+v.z*0.15);
-    ctx.fillStyle=`rgba(${cr},${cg},${cb},${op})`;
-    ctx.beginPath();ctx.arc(v.px,v.py,1.2+Math.max(0,v.z)*1.2,0,Math.PI*2);ctx.fill();
+  // Vértices como puntos dorados brillantes
+  projected.forEach(v=>{
+    const op=Math.max(0.1,0.5+v.z*0.3);
+    const r=2+Math.max(0,v.z)*2;
+    const g=ctx.createRadialGradient(v.px,v.py,0,v.px,v.py,r*2);
+    g.addColorStop(0,`rgba(255,240,150,${op})`);
+    g.addColorStop(1,`rgba(255,200,50,0)`);
+    ctx.fillStyle=g;ctx.beginPath();ctx.arc(v.px,v.py,r*2,0,Math.PI*2);ctx.fill();
   });
   ctx.restore();
 }
@@ -419,6 +423,7 @@ export default function App(){
     synOn:true,synVol:0.7,synDl:0.25,synRv:0.2,synKey:"C",synScale:"Pentatónica Menor",
     g:null,vAct:Array(NV).fill(false),vOp:Array(NV).fill(0),vManual:{},
     stopped:false,audioSilenced:false,curNote:"—",dbg:"init",poseCount:0,
+    dancer2On:false,dancer2Color:"#F59E0B",dancer2:null,
     shadowOn:true,shadowDelay:0.5,shadowMirror:true,shadowColor:"#F43F5E",shadowRandom:0.3,shadowOpacity:0.6,
     entityColor:"#10B981",entityOpacity:0.85,ghost:0,showOv:true,
     arc:"deriva",droneOn:true,
@@ -479,7 +484,7 @@ export default function App(){
 
   const listCams=async()=>{try{const d=await navigator.mediaDevices.enumerateDevices();setCameras(d.filter(x=>x.kind==="videoinput"));}catch(e){}};
   const switchCam=async(id)=>{try{if(streamRef.current)streamRef.current.getTracks().forEach(t=>t.stop());const c={video:{width:{ideal:640},height:{ideal:480}}};if(id)c.video.deviceId={exact:id};else c.video.facingMode="user";const s=await navigator.mediaDevices.getUserMedia(c);streamRef.current=s;if(wcRef.current){wcRef.current.srcObject=s;wcRef.current.muted=true;wcRef.current.play().catch(()=>{});}if(pvRef.current){pvRef.current.srcObject=s;pvRef.current.muted=true;pvRef.current.play().catch(()=>{});}setCamId(id||"");await listCams();}catch(e){}};
-  const startRec=()=>{const c=outRef.current;if(!c)return;const st=c.captureStream(30);const mr=new MediaRecorder(st,{mimeType:"video/webm",videoBitsPerSecond:4e6});recChunks.current=[];mr.ondataavailable=e=>{if(e.data.size>0)recChunks.current.push(e.data);};mr.onstop=()=>{const b=new Blob(recChunks.current,{type:"video/webm"});const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download=`manila-${Date.now()}.webm`;a.click();};mr.start(100);recRef.current=mr;setRecording(true);setRecTime(0);recTimer.current=setInterval(()=>setRecTime(t=>t+1),1000);};
+  const startRec=()=>{const c=outRef.current;if(!c)return;const st=c.captureStream(30);const mr=new MediaRecorder(st,{mimeType:"video/webm",videoBitsPerSecond:4e6});recChunks.current=[];mr.ondataavailable=e=>{if(e.data.size>0)recChunks.current.push(e.data);};mr.onstop=()=>{const b=new Blob(recChunks.current,{type:"video/webm"});const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download=`korpsound-${Date.now()}.webm`;a.click();};mr.start(100);recRef.current=mr;setRecording(true);setRecTime(0);recTimer.current=setInterval(()=>setRecTime(t=>t+1),1000);};
   const stopRec=()=>{if(recRef.current?.state==="recording")recRef.current.stop();recRef.current=null;setRecording(false);clearInterval(recTimer.current);};
   const loadVid=(file,i)=>{const r=vRefs[i];if(r?.current){r.current.src=URL.createObjectURL(file);r.current.loop=true;r.current.muted=true;r.current.pause();S.layers[i].ld=true;S.layers[i].nm=file.name;tk();}};
 
@@ -527,6 +532,12 @@ export default function App(){
       const vid=(wc&&wc.readyState>=2)?wc:(pv&&pv.readyState>=2)?pv:null;
 
       if(detRef.current&&vid&&!detecting){
+        // Cambiar modelo si se activó/desactivó segundo bailarín
+        if(S.dancer2On!==S._lastDancer2Mode){
+          S._lastDancer2Mode=S.dancer2On;
+          const modelType=S.dancer2On?poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING:poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING;
+          poseDetection.createDetector(poseDetection.SupportedModels.MoveNet,{modelType}).then(d=>{detRef.current=d;}).catch(()=>{});
+        }
         const now=performance.now();
         if(now-lastPT>60){
           lastPT=now;detecting=true;
@@ -536,6 +547,10 @@ export default function App(){
             S.poseCount=poses?.length||0;
             if(poses?.[0]?.keypoints){const g=gRef.current.run(poses[0].keypoints,192,192);S.g=g;S.dbg=g?"ok":"low";if(g&&S.shadowOn)shRef.current.push(g.lm);}
             else S.dbg="no_body";
+            if(S.dancer2On&&poses?.[1]?.keypoints){
+              const d2=[];for(let i=0;i<17;i++){const kp=poses[1].keypoints[i];d2[i]=(kp&&kp.score>0.2)?{x:kp.x/192,y:kp.y/192}:null;}
+              S.dancer2=d2;
+            }else S.dancer2=null;
             detecting=false;
           }).catch(()=>{S.dbg="err";detecting=false;});
         }
@@ -579,27 +594,47 @@ export default function App(){
         }
       }
 
-      // ── Sistema de texto poético ───────────────────────────────────
+      // ── Sistema de texto poético — solo desde las manos ───────────
       if(S.poetryOn&&g){
         const arc=S.arc;const motion=g.mt||0;
+        const spdR=g.spd.r||0,spdL=g.spd.l||0;
         if(S.anchorCD>0)S.anchorCD--;
         if(S.phraseTimer>0)S.phraseTimer--;
-        // Gestos ancla
+
+        // Frases ancla (gestos específicos)
         if(S.anchorCD<=0){
           let ap=null;
           if(g.rExt)ap=VIAJAR_PHRASES.find(p=>p.anchor==="rExt"&&p.arc===arc);
           else if(g.bUp&&!g.rExt)ap=VIAJAR_PHRASES.find(p=>p.anchor==="bUp"&&p.arc===arc);
           else if(g.lExt)ap=VIAJAR_PHRASES.find(p=>p.anchor==="lExt"&&p.arc===arc);
-          if(ap&&ap.text!==S.lastPhrase){spawnPhrase(ap.text,arc,g,W,H);S.lastPhrase=ap.text;S.anchorCD=150;S.phraseTimer=80;}
+          if(ap&&ap.text!==S.lastPhrase){
+            // Spawn desde la mano que hizo el gesto
+            const handJoint=g.rExt?10:g.lExt?9:10;
+            const hp=g.lm[handJoint];
+            const hx=hp?(1-hp.x)*W:W/2;
+            const hy=hp?hp.y*H:H/2;
+            particlesRef.current.push(new TextParticle(ap.text,hx,hy,ARC_PALETTES[arc].textColor,arc));
+            if(particlesRef.current.length>10)particlesRef.current.shift();
+            S.lastPhrase=ap.text;S.anchorCD=150;S.phraseTimer=80;
+          }
         }
-        // Frases libres
-        if(S.phraseTimer<=0){
+
+        // Frases libres — solo si hay movimiento real en alguna mano
+        if(S.phraseTimer<=0&&(spdR>0.4||spdL>0.4)){
           const pool=VIAJAR_PHRASES.filter(p=>p.arc===arc&&!p.anchor&&p.text!==S.lastPhrase);
           if(pool.length){
             const tw=pool.reduce((s,p)=>s+p.w,0);let r=Math.random()*tw,chosen=pool[0];
             for(const p of pool){r-=p.w;if(r<=0){chosen=p;break;}}
-            spawnPhrase(chosen.text,arc,g,W,H);S.lastPhrase=chosen.text;
-            S.phraseTimer={deriva:70,kenopsia:180,apertura:100}[arc]||100;
+            // Spawn desde la mano más activa
+            const activeHand=spdR>=spdL?10:9;
+            const hp=g.lm[activeHand];
+            const hx=hp?(1-hp.x)*W+(Math.random()-0.5)*40:W/2;
+            const hy=hp?hp.y*H+(Math.random()-0.5)*30:H/2;
+            particlesRef.current.push(new TextParticle(chosen.text,hx,hy,ARC_PALETTES[arc].textColor,arc));
+            if(particlesRef.current.length>8)particlesRef.current.shift();
+            S.lastPhrase=chosen.text;
+            // Intervalos más largos — texto escaso y significativo
+            S.phraseTimer={deriva:120,kenopsia:280,apertura:150}[arc]||150;
           }
         }
         particlesRef.current.forEach(p=>p.update(motion));
@@ -643,6 +678,7 @@ export default function App(){
       }
 
       if(g?.lm)drawFluid(ctx,g.lm,W,H,palette.entityColor,S.entityOpacity,t,g.mt||0);
+      if(S.dancer2On&&S.dancer2)drawFluid(ctx,S.dancer2,W,H,S.dancer2Color,S.entityOpacity*0.75,t,0.2);
       if(S.shadowOn&&shRef.current.buf.length>3){shRef.current.mir=S.shadowMirror;shRef.current.rnd=S.shadowRandom;shRef.current.df=S.shadowDelay;drawGhost(ctx,shRef.current,W,H,palette.shadowColor,S.shadowOpacity,t);}
 
       // Segunda proyección — canvas oculto → copia al popup
@@ -687,7 +723,7 @@ export default function App(){
         }
       }
       if(g?.stopA){ctx.globalAlpha=0.15;ctx.fillStyle="#FF0050";ctx.fillRect(0,0,W,H);ctx.globalAlpha=1;ctx.fillStyle="#fff";ctx.font="bold 18px sans-serif";ctx.textAlign="center";ctx.fillText("DETENIDO",W/2,H/2);}
-      if(!g){ctx.fillStyle="rgba(255,255,255,0.4)";ctx.font="14px sans-serif";ctx.textAlign="center";ctx.fillText({no_body:"Ponte frente a la cámara",no_video:"Conectando...",loading:"Cargando...",err:"Error",init:"Iniciando..."}[S.dbg]||S.dbg,W/2,H/2);}
+      if(!g){ctx.fillStyle="rgba(255,255,255,0.4)";ctx.font="14px sans-serif";ctx.textAlign="center";ctx.fillText({no_body:"Ponte frente a la cámara",no_video:"Conectando...",loading:"Cargando...",err:"Error de detección",init:"Iniciando..."}[S.dbg]||"",W/2,H/2);}
       if(recording){ctx.save();ctx.fillStyle="#FF0050";ctx.beginPath();ctx.arc(18,18,6,0,Math.PI*2);ctx.fill();ctx.fillStyle="#fff";ctx.font="bold 10px sans-serif";ctx.fillText(`REC ${Math.floor(recTime/60)}:${(recTime%60).toString().padStart(2,"0")}`,28,22);ctx.restore();}
 
       fpsR.current.c++;const now2=performance.now();if(now2-fpsR.current.t>1000){setFps(fpsR.current.c);fpsR.current={c:0,t:now2};}
@@ -715,12 +751,12 @@ export default function App(){
   return(
     <div style={{minHeight:"100vh",background:phase==="running"?bg:"#F0F4F8",color:txP,fontFamily:"system-ui,sans-serif",fontSize:13}}>
       <video ref={wcRef} width="640" height="480" muted playsInline autoPlay style={{position:"fixed",top:-9999,left:-9999,opacity:0,pointerEvents:"none"}}/>
-      {phase==="start"&&(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{textAlign:"center"}}><h1 style={{fontSize:48,fontWeight:800,margin:"0 0 8px"}}>m<span style={{color:ac}}>A</span>n<span style={{color:ac}}>I</span>la</h1><p style={{color:txS,marginBottom:28}}>modelo IA + cuerpo + danza</p><button onClick={()=>setPhase("loading")} style={{background:ac,color:"#fff",border:"none",padding:"18px 56px",fontSize:17,fontWeight:700,cursor:"pointer",borderRadius:12}}>Iniciar</button></div></div>)}
+      {phase==="start"&&(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{textAlign:"center"}}><h1 style={{fontSize:48,fontWeight:800,margin:"0 0 8px"}}>K<span style={{color:ac}}>orp</span>S<span style={{color:"#F59E0B"}}>ound</span></h1><p style={{color:txS,marginBottom:28}}>movimiento · composición · presencia</p><button onClick={()=>setPhase("loading")} style={{background:ac,color:"#fff",border:"none",padding:"18px 56px",fontSize:17,fontWeight:700,cursor:"pointer",borderRadius:12}}>Iniciar</button></div></div>)}
       {phase==="loading"&&(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{textAlign:"center"}}><div style={{width:50,height:50,border:`4px solid ${bdr}`,borderTop:`4px solid ${ac}`,borderRadius:"50%",margin:"0 auto 20px",animation:"spin 1s linear infinite"}}/><div style={{fontSize:15,fontWeight:600}}>{loadMsg}</div><style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style></div></div>)}
       {phase==="running"&&(<div style={{display:"flex",flexDirection:"column",height:"100vh"}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"5px 14px",borderBottom:`1px solid ${bdr}`,background:bgC}}>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
-            <span style={{fontWeight:800,fontSize:16}}>m<span style={{color:ac}}>A</span>n<span style={{color:ac}}>I</span>la</span>
+            <span style={{fontWeight:800,fontSize:16}}>K<span style={{color:ac}}>orp</span>S<span style={{color:"#F59E0B"}}>ound</span></span>
             <span style={{background:"#D1FAE5",color:"#059669",padding:"2px 7px",borderRadius:6,fontSize:10,fontWeight:600}}>{S.poseCount}p</span>
             {S.curNote!=="—"&&<span style={{background:"#D1FAE5",color:"#059669",padding:"2px 7px",borderRadius:6,fontSize:11,fontWeight:700}}>♫ {S.curNote}</span>}
             {recording&&<span style={{background:"#FEE2E2",color:"#DC2626",padding:"2px 7px",borderRadius:6,fontSize:10,fontWeight:700}}>REC</span>}
@@ -802,6 +838,9 @@ export default function App(){
                 <FxS label="Opacidad cámara" val={S.body.op} min={0} max={1} step={0.01} onChange={v=>{S.body.op=v;tk();}}/>
                 <span style={sLbl}>Fusión</span><select value={S.body.bl} onChange={e=>{S.body.bl=e.target.value;tk();}} style={{...sSel(),marginBottom:10}}>{BLENDS.map(b=><option key={b}>{b}</option>)}</select>
                 <FxS label="Estela/Ghost" val={S.ghost} min={0} max={0.95} step={0.01} color={CL[3]} onChange={v=>{S.ghost=v;if(v===0&&ghostCRef.current){const gx=ghostCRef.current.getContext("2d");gx.fillStyle="#000";gx.fillRect(0,0,960,540);}tk();}}/>
+                <div style={{borderTop:`2px solid ${bdr}`,paddingTop:10,marginTop:4,fontWeight:700,marginBottom:8}}>Segundo bailarín</div>
+                <Tog on={S.dancer2On} color={CL[2]} label="Detectar 2ª persona" onTap={()=>{S.dancer2On=!S.dancer2On;S._lastDancer2Mode=null;tk();}}/>
+                {S.dancer2On&&(<><span style={sLbl}>Color</span><ColorPick val={S.dancer2Color} onChange={c=>{S.dancer2Color=c;tk();}}/></>)}
                 <div style={{borderTop:`2px solid ${bdr}`,paddingTop:10,marginTop:4,fontWeight:700,marginBottom:8}}>Sombra IA</div>
                 <Tog on={S.shadowOn} color={CL[1]} label="Sombra activa" onTap={()=>{S.shadowOn=!S.shadowOn;tk();}}/>
                 {S.shadowOn&&(<>
