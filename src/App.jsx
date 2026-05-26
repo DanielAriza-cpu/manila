@@ -243,9 +243,149 @@ class Gest{
     // Cruce sobre la cabeza: muñecas cruzadas por encima de los hombros
     const crossAbove=this.d(wl,wr)<sW*0.7&&wl.y<sl.y-0.05&&wr.y<sr.y-0.05&&this.d(wl,wr)<sW*0.5;
     const sq=Math.max(0,Math.min(1,((hl.y+hr.y)/2-this.sqR)/0.1));
+    // T-pose: brazos extendidos horizontalmente a ambos lados simultáneamente
+    const tPose=lExt&&rExt&&Math.abs(wl.y-sl.y)<0.12&&Math.abs(wr.y-sr.y)<0.12;
     if(cross)this.stH=Math.min(40,this.stH+1);else this.stH=Math.max(0,this.stH-2);
-    return{rP,lP,spd:this.spd,hD,bUp,lExt,rExt,cross,crossChest,crossAbove,sq,stopA:this.stH>=25,stopH:this.stH,lAct:this.spd.l>0.3,rAct:this.spd.r>0.2,rPlk:this.spd.r>2,rUp:wr.y<sr.y-0.1,vA:lExt,vB:rExt,vC:bUp,vD:sq>0.15,lm:m,mt:Math.min(1,(this.spd.l+this.spd.r)/6)};
+    return{rP,lP,spd:this.spd,hD,bUp,lExt,rExt,cross,crossChest,crossAbove,tPose,sq,stopA:this.stH>=25,stopH:this.stH,lAct:this.spd.l>0.3,rAct:this.spd.r>0.2,rPlk:this.spd.r>2,rUp:wr.y<sr.y-0.1,vA:lExt,vB:rExt,vC:bUp,vD:sq>0.15,lm:m,mt:Math.min(1,(this.spd.l+this.spd.r)/6)};
   }
+}
+
+// ── Sistema de Loops ─────────────────────────────────────────────────────
+// Hasta 4 loops simultáneos. Cada loop graba audio del sintetizador
+// durante un tiempo definido y lo reproduce en bucle indefinidamente.
+class LoopRecorder{
+  constructor(){
+    this.c=null;          // AudioContext compartido
+    this.loops=[];        // [{buffer, sourceNode, gainNode, active, recording, label}]
+    this.MAX=4;
+    this.REC_DURATION=4;  // segundos de grabación por loop
+    this.on=false;
+    this.recordingIdx=null;
+    this.recStartTime=null;
+    this.inputNode=null;  // nodo fuente que conectamos para grabar
+    this.processor=null;  // ScriptProcessorNode para capturar muestras
+    this.recSamples=[];
+  }
+
+  init(audioCtx, sourceNode){
+    if(this.on)return;
+    this.c=audioCtx;
+    this.inputNode=sourceNode;
+    // Inicializar 4 slots vacíos
+    for(let i=0;i<this.MAX;i++){
+      this.loops.push({buffer:null,sourceNode:null,gainNode:null,active:false,recording:false,label:`LOOP ${i+1}`,vol:0.8});
+    }
+    this.on=true;
+  }
+
+  // Inicia grabación de un slot
+  startRecord(idx){
+    if(!this.on||idx<0||idx>=this.MAX)return;
+    if(this.recordingIdx!==null)this.stopRecord(); // detener grabación previa
+    // Detener loop si estaba corriendo
+    this.stopLoop(idx);
+    this.loops[idx].recording=true;
+    this.recordingIdx=idx;
+    this.recSamples=[];
+    this.recStartTime=this.c.currentTime;
+    // Grabar via ScriptProcessor (compatible con todos los browsers)
+    const bufSize=4096;
+    this.processor=this.c.createScriptProcessor(bufSize,1,1);
+    this.processor.onaudioprocess=(e)=>{
+      if(this.recordingIdx===null)return;
+      const elapsed=this.c.currentTime-this.recStartTime;
+      if(elapsed>=this.REC_DURATION){this.stopRecord();return;}
+      const data=e.inputBuffer.getChannelData(0);
+      this.recSamples.push(new Float32Array(data));
+    };
+    this.inputNode.connect(this.processor);
+    this.processor.connect(this.c.destination);
+  }
+
+  // Detiene la grabación y construye el buffer
+  stopRecord(){
+    if(!this.on||this.recordingIdx===null)return;
+    const idx=this.recordingIdx;
+    this.recordingIdx=null;
+    this.loops[idx].recording=false;
+    if(this.processor){
+      try{this.inputNode.disconnect(this.processor);}catch(e){}
+      try{this.processor.disconnect();}catch(e){}
+      this.processor=null;
+    }
+    if(this.recSamples.length===0)return;
+    // Construir AudioBuffer con las muestras grabadas
+    const sr=this.c.sampleRate;
+    const total=this.recSamples.reduce((s,a)=>s+a.length,0);
+    const buf=this.c.createBuffer(1,total,sr);
+    const ch=buf.getChannelData(0);
+    let offset=0;
+    this.recSamples.forEach(s=>{ch.set(s,offset);offset+=s.length;});
+    this.loops[idx].buffer=buf;
+    this.recSamples=[];
+    // Iniciar reproducción inmediatamente
+    this.playLoop(idx);
+  }
+
+  // Reproduce un loop en bucle
+  playLoop(idx){
+    if(!this.on||!this.loops[idx]?.buffer)return;
+    this.stopLoop(idx); // detener instancia previa
+    const loop=this.loops[idx];
+    const src=this.c.createBufferSource();
+    src.buffer=loop.buffer;
+    src.loop=true;
+    const gn=this.c.createGain();
+    gn.gain.value=loop.vol;
+    src.connect(gn);gn.connect(this.c.destination);
+    src.start();
+    loop.sourceNode=src;loop.gainNode=gn;loop.active=true;
+  }
+
+  // Detiene un loop
+  stopLoop(idx){
+    if(!this.on||idx<0||idx>=this.MAX)return;
+    const loop=this.loops[idx];
+    if(loop.sourceNode){
+      try{loop.sourceNode.stop();}catch(e){}
+      loop.sourceNode=null;
+    }
+    loop.active=false;
+  }
+
+  // Toggle: si tiene buffer y está activo → para. Si no → inicia grabación.
+  // Si tiene buffer y está parado → reproduce de nuevo.
+  toggle(idx){
+    if(!this.on||idx<0||idx>=this.MAX)return;
+    const loop=this.loops[idx];
+    if(loop.recording){this.stopRecord();return;}
+    if(loop.active){this.stopLoop(idx);}
+    else if(loop.buffer){this.playLoop(idx);}
+    else{this.startRecord(idx);}
+  }
+
+  // Para todos los loops
+  stopAll(){
+    if(!this.on)return;
+    if(this.recordingIdx!==null)this.stopRecord();
+    for(let i=0;i<this.MAX;i++)this.stopLoop(i);
+  }
+
+  // Borra un loop completamente
+  clear(idx){
+    if(!this.on||idx<0||idx>=this.MAX)return;
+    this.stopLoop(idx);
+    this.loops[idx].buffer=null;
+  }
+
+  setVol(idx,vol){
+    if(!this.on||idx<0||idx>=this.MAX)return;
+    this.loops[idx].vol=vol;
+    if(this.loops[idx].gainNode)this.loops[idx].gainNode.gain.setTargetAtTime(vol,this.c.currentTime,0.05);
+  }
+
+  // Estado para el UI
+  getState(){return this.loops.map((l,i)=>({idx:i,active:l.active,recording:l.recording,hasBuffer:!!l.buffer,vol:l.vol,label:l.label}));}
 }
 
 class Drone{
@@ -531,12 +671,15 @@ export default function App(){
     poetryOn:true,anchorCD:0,lastPhrase:"",phraseTimer:0,
     icoOn:true,zonesOn:true,
     ghostProjectionOn:false,ghostBgVideoIdx:-1,ghostWorldOp:0.85,
+    loopOn:true,          // sistema de loops activo
+    tPoseCD:0,            // cooldown del gesto T-pose
+    activeLoopIdx:0,      // qué loop se graba/controla con T-pose
   }).current;
 
   const wcRef=useRef(null);const pvRef=useRef(null);const outRef=useRef(null);const bcRef=useRef(null);
   const vRefs=Array.from({length:NV},()=>useRef(null));
   const cRef=useRef(null);const detRef=useRef(null);const streamRef=useRef(null);
-  const gRef=useRef(new Gest());const syRef=useRef(new Synth());const shRef=useRef(new Shadow());const droneRef=useRef(new Drone());
+  const gRef=useRef(new Gest());const syRef=useRef(new Synth());const shRef=useRef(new Shadow());const droneRef=useRef(new Drone());const loopRef=useRef(new LoopRecorder());
   const plkTRef=useRef(0);const animRef=useRef(null);const fpsR=useRef({c:0,t:performance.now()});
   const recRef=useRef(null);const recChunks=useRef([]);const recTimer=useRef(null);
   const ghostCRef=useRef(null);
@@ -635,6 +778,8 @@ export default function App(){
       await syRef.current.init();
       await droneRef.current.init(syRef.current.c);
       droneRef.current.setArc("deriva");
+      // Inicializar loop recorder conectado al master del synth
+      loopRef.current.init(syRef.current.c, syRef.current.m);
       setPhase("running");
     }catch(e){setLoadMsg("Error: "+e.message);}})();
     return()=>{dead=true;};
@@ -699,8 +844,25 @@ export default function App(){
       }
       // Si no hay movimiento, libera todas las voces suavemente
       if(g&&!g.stopA&&!hasMotion){syn.rel("melody",0.5);syn.rel("lead",0.5);syn.rel("bass",0.5);syn.rel("chord",0.8);syn.rel("sub",0.8);S.curNote="—";}
-      if(g?.stopA&&!S.stopped){S.stopped=true;syn.relAll();drone.stop();}
+      if(g?.stopA&&!S.stopped){S.stopped=true;syn.relAll();drone.stop();loopRef.current.stopAll();}
       if(!g?.stopA&&S.stopped){S.stopped=false;drone.resume();}
+
+      // ── Loops: T-pose → graba/controla el loop activo ─────────────
+      if(S.loopOn&&g&&!g.stopA){
+        if(S.tPoseCD>0)S.tPoseCD--;
+        if(g.tPose&&S.tPoseCD<=0){
+          const lr=loopRef.current;
+          const loop=lr.loops[S.activeLoopIdx];
+          if(loop.recording){
+            lr.stopRecord();
+          }else if(!loop.buffer){
+            lr.startRecord(S.activeLoopIdx);
+          }else{
+            lr.toggle(S.activeLoopIdx);
+          }
+          S.tPoseCD=40; // ~1.3 seg de cooldown
+        }
+      }
 
       if(g&&!g.stopA){
         // Cruce en el pecho → pausa todos los vídeos
@@ -839,6 +1001,35 @@ export default function App(){
         if(S.curNote!=="—"){ctx.fillStyle="rgba(16,185,129,0.8)";ctx.font="bold 13px monospace";ctx.textAlign="left";ctx.fillText("♫ "+S.curNote,10,22);}
         ctx.fillStyle=palette.primary+"CC";ctx.font="bold 10px monospace";ctx.textAlign="left";ctx.fillText(palette.label,10,H-10);
         ctx.fillStyle="rgba(255,255,255,0.25)";ctx.font="10px monospace";ctx.textAlign="right";ctx.fillText(fps+"fps",W-8,H-8);
+
+        // Indicador loops activos
+        if(S.loopOn){
+          const lstate=loopRef.current.loops;
+          const anyRec=lstate.some(l=>l.recording);
+          const anyActive=lstate.some(l=>l.active);
+          if(anyRec||anyActive){
+            ctx.save();
+            let lx=10;const ly=H-30;
+            lstate.forEach((l,i)=>{
+              if(!l.buffer&&!l.recording)return;
+              const col=l.recording?"#F43F5E":l.active?"#A855F7":"#94A3B8";
+              ctx.fillStyle=col;
+              ctx.globalAlpha=l.recording?(0.5+0.5*Math.sin(t*8)):0.8;
+              ctx.beginPath();ctx.arc(lx+6,ly,5,0,Math.PI*2);ctx.fill();
+              ctx.globalAlpha=0.7;ctx.fillStyle="#fff";ctx.font="bold 8px monospace";ctx.textAlign="left";
+              ctx.fillText(`L${i+1}`,lx+14,ly+3);
+              lx+=32;
+            });
+            ctx.restore();
+          }
+          // Indicador T-pose activo
+          if(g?.tPose){
+            ctx.save();ctx.globalAlpha=0.8;
+            ctx.fillStyle="#A855F7";ctx.font="bold 11px monospace";ctx.textAlign="center";
+            ctx.fillText(`T ← L${S.activeLoopIdx+1}`,W/2,H-30);
+            ctx.restore();
+          }
+        }
         // Indicador silencio total
         if(S.audioSilenced){
           ctx.save();ctx.globalAlpha=0.85;ctx.fillStyle="#1E293B";ctx.fillRect(W/2-70,H/2-22,140,44);
@@ -958,6 +1149,65 @@ export default function App(){
                 <FxS label="Delay" val={S.synDl} min={0} max={0.8} step={0.01} color={CL[1]} onChange={v=>{S.synDl=v;syn.setDl(v);tk();}}/>
                 <FxS label="Reverb" val={S.synRv} min={0} max={0.8} step={0.01} color={CL[3]} onChange={v=>{S.synRv=v;syn.setRv(v);tk();}}/>
                 <Tog on={S.synOn} label="Sintetizador" onTap={()=>{S.synOn=!S.synOn;if(!S.synOn)syn.relAll();tk();}}/>
+
+                {/* ── LOOPS ── */}
+                <div style={{borderTop:`2px solid ${bdr}`,paddingTop:10,marginTop:6}}>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+                    <span style={{fontSize:13,fontWeight:700}}>Loops en vivo</span>
+                    <Tog on={S.loopOn} color="#A855F7" label="" onTap={()=>{S.loopOn=!S.loopOn;if(!S.loopOn)loopRef.current.stopAll();tk();}}/>
+                  </div>
+                  <div style={{fontSize:9,color:txS,marginBottom:10,lineHeight:1.6,background:"#F8FAFC",padding:"8px 10px",borderRadius:8}}>
+                    <div><strong style={{color:"#A855F7"}}>T-pose</strong> (brazos horizontales a ambos lados) → graba / para el loop activo</div>
+                    <div>Duración de grabación: <strong>4 seg</strong></div>
+                  </div>
+
+                  {/* Selector de loop activo */}
+                  <div style={{display:"flex",gap:4,marginBottom:10}}>
+                    {[0,1,2,3].map(i=>(
+                      <div key={i} onPointerDown={()=>{S.activeLoopIdx=i;tk();}}
+                        style={{flex:1,padding:"8px 4px",textAlign:"center",cursor:"pointer",borderRadius:8,
+                          border:`2px solid ${S.activeLoopIdx===i?"#A855F7":bdr}`,
+                          background:S.activeLoopIdx===i?"#A855F715":bgC}}>
+                        <div style={{fontSize:10,fontWeight:700,color:S.activeLoopIdx===i?"#A855F7":txS}}>L{i+1}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Estado de cada loop */}
+                  {loopRef.current.loops.map((loop,i)=>{
+                    const isActive=S.activeLoopIdx===i;
+                    const color=loop.recording?"#F43F5E":loop.active?"#A855F7":loop.buffer?"#94A3B8":bdr;
+                    return(
+                      <div key={i} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,padding:"8px 10px",borderRadius:8,border:`1px solid ${color}30`,background:loop.active||loop.recording?"#A855F708":bgC}}>
+                        {/* Indicador estado */}
+                        <div style={{width:8,height:8,borderRadius:"50%",background:color,flexShrink:0,
+                          boxShadow:loop.recording?`0 0 6px #F43F5E`:loop.active?`0 0 6px #A855F7`:"none"}}/>
+                        <span style={{fontSize:10,fontWeight:700,color:txS,minWidth:28}}>L{i+1}</span>
+                        <span style={{fontSize:9,color:loop.recording?"#F43F5E":loop.active?"#A855F7":txS,flex:1}}>
+                          {loop.recording?"● REC...":loop.active?"▶ activo":loop.buffer?"■ en pausa":"vacío"}
+                        </span>
+                        {/* Volumen */}
+                        {loop.buffer&&<input type="range" min={0} max={1} step={0.05} value={loop.vol}
+                          onChange={e=>{loopRef.current.setVol(i,parseFloat(e.target.value));tk();}}
+                          style={{width:50,accentColor:"#A855F7",height:6,cursor:"pointer"}}/>}
+                        {/* Borrar */}
+                        {loop.buffer&&<div onPointerDown={()=>{loopRef.current.clear(i);tk();}}
+                          style={{cursor:"pointer",fontSize:10,color:"#F43F5E",padding:"2px 6px",border:`1px solid #F43F5E30`,borderRadius:4}}>✕</div>}
+                        {/* Play/Pause manual */}
+                        {loop.buffer&&!loop.recording&&<div onPointerDown={()=>{loopRef.current.toggle(i);tk();}}
+                          style={{cursor:"pointer",fontSize:10,color:"#A855F7",padding:"2px 6px",border:`1px solid #A855F730`,borderRadius:4}}>
+                          {loop.active?"⏸":"▶"}
+                        </div>}
+                      </div>
+                    );
+                  })}
+
+                  {/* Botón limpiar todos */}
+                  <div onPointerDown={()=>{for(let i=0;i<4;i++)loopRef.current.clear(i);tk();}}
+                    style={{cursor:"pointer",padding:"7px",borderRadius:8,background:"#F8FAFC",fontSize:10,color:txS,textAlign:"center",marginTop:4,border:`1px solid ${bdr}`}}>
+                    Limpiar todos los loops
+                  </div>
+                </div>
               </div>)}
               {panel==="visual"&&(<div>
                 <div style={{fontWeight:700,marginBottom:8}}>Entidad fluida</div>
