@@ -221,6 +221,7 @@ class Synth{
   // Toggle activo — si está desactivado, silencio inmediato
   setEnabled(on){this.enabled=on;if(!on)this.silence();else this.unsilence();}
   get isEnabled(){return this.enabled!==false;}
+}
 
 class Gest{
   constructor(){this.sm=null;this.spd={l:0,r:0};this.pw=null;this.stH=0;this.sqR=0;this.sqC=false;}
