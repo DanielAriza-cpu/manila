@@ -328,8 +328,9 @@ class SamplePlayer{
 }
 
 class Gest{
-  constructor(){this.sm=null;this.spd={l:0,r:0};this.pw=null;this.stH=0;this.sqR=0;this.sqC=false;}
+  constructor(){this.sm=null;this.spd={l:0,r:0};this.pw=null;this.stH=0;this.sqR=0;this.sqC=false;this.rAngles=[];this.lAngles=[];this.circleCD={r:0,l:0};}
   d(a,b){return Math.sqrt((a.x-b.x)**2+(a.y-b.y)**2);}
+  _circ(angles){if(angles.length<20)return false;let t=0;for(let i=1;i<angles.length;i++){let d=angles[i]-angles[i-1];if(d>Math.PI)d-=2*Math.PI;if(d<-Math.PI)d+=2*Math.PI;t+=d;}return Math.abs(t)>Math.PI*1.6;}
   run(kps,vw,vh){
     const pts=[];for(let i=0;i<17;i++){const kp=kps[i];pts[i]=(kp&&kp.score>0.25)?{x:kp.x/vw,y:kp.y/vh}:null;}
     const lS=pts[5],rS=pts[6],lW=pts[9],rW=pts[10],lH=pts[11],rH=pts[12];
@@ -348,16 +349,21 @@ class Gest{
     const lExt=wl.x<sl.x-sW*0.8&&Math.abs(wl.y-sl.y)<0.15;
     const rExt=wr.x>sr.x+sW*0.8&&Math.abs(wr.y-sr.y)<0.15;
     const cross=this.d(wl,sr)<sW*0.5&&this.d(wr,sl)<sW*0.5;
-    // Cruce en el pecho: muñecas cruzadas entre hombros y caderas, a altura del pecho
     const chestY=(sl.y+hl.y)/2;
     const crossChest=this.d(wl,wr)<sW*0.6&&Math.abs((wl.y+wr.y)/2-chestY)<0.12&&wl.y>sl.y&&wr.y>sr.y&&!bUp;
-    // X sobre la cabeza: brazos arriba Y cruzados (muñecas cruzadas por encima de hombros)
     const xAbove=wl.y<sl.y-0.08&&wr.y<sr.y-0.08&&this.d(wl,wr)<sW*0.5&&((wl.x>wr.x&&wl.x-wr.x>sW*0.1)||(wr.x>wl.x&&wr.x-wl.x>sW*0.1));
     const sq=Math.max(0,Math.min(1,((hl.y+hr.y)/2-this.sqR)/0.1));
-    // T-pose: brazos extendidos horizontalmente a ambos lados simultáneamente
     const tPose=lExt&&rExt&&Math.abs(wl.y-sl.y)<0.12&&Math.abs(wr.y-sr.y)<0.12;
+    // Detección de círculos
+    const re=m[8],le=m[7];
+    if(re&&wr){const a=Math.atan2(wr.y-re.y,wr.x-re.x);this.rAngles.push(a);if(this.rAngles.length>40)this.rAngles.shift();}
+    if(le&&wl){const a=Math.atan2(wl.y-le.y,wl.x-le.x);this.lAngles.push(a);if(this.lAngles.length>40)this.lAngles.shift();}
+    if(this.circleCD.r>0)this.circleCD.r--;if(this.circleCD.l>0)this.circleCD.l--;
+    let circleR=false,circleL=false;
+    if(this.circleCD.r<=0&&this._circ(this.rAngles)){circleR=true;this.circleCD.r=60;this.rAngles=[];}
+    if(this.circleCD.l<=0&&this._circ(this.lAngles)){circleL=true;this.circleCD.l=60;this.lAngles=[];}
     if(cross)this.stH=Math.min(40,this.stH+1);else this.stH=Math.max(0,this.stH-2);
-    return{rP,lP,spd:this.spd,hD,bUp,lExt,rExt,cross,crossChest,xAbove,tPose,sq,stopA:this.stH>=25,stopH:this.stH,lAct:this.spd.l>0.3,rAct:this.spd.r>0.2,rPlk:this.spd.r>2,rUp:wr.y<sr.y-0.1,vA:lExt,vB:rExt,vC:bUp,vD:sq>0.15,lm:m,mt:Math.min(1,(this.spd.l+this.spd.r)/6)};
+    return{rP,lP,spd:this.spd,hD,bUp,lExt,rExt,cross,crossChest,xAbove,tPose,sq,circleR,circleL,stopA:this.stH>=25,stopH:this.stH,lAct:this.spd.l>0.3,rAct:this.spd.r>0.2,rPlk:this.spd.r>2,rUp:wr.y<sr.y-0.1,vA:lExt,vB:rExt,vC:bUp,vD:sq>0.15,lm:m,mt:Math.min(1,(this.spd.l+this.spd.r)/6)};
   }
 }
 
@@ -559,7 +565,23 @@ function drawGhost(ctx,sh,W,H,color,alpha,t){
   const cr=parseInt(h.substring(0,2),16),cg=parseInt(h.substring(2,4),16),cb=parseInt(h.substring(4,6),16);
   const rgba=a=>`rgba(${cr},${cg},${cb},${Math.min(1,Math.max(0,a))})`;
   const di=Math.floor(sh.buf.length*Math.max(0,Math.min(0.9,sh.df)));
-  const lm=sh.buf[Math.max(0,sh.buf.length-1-di)];if(!lm)return;
+  const lmRaw=sh.buf[Math.max(0,sh.buf.length-1-di)];if(!lmRaw)return;
+
+  // Extrapolación: si está activa, extendemos el movimiento usando la diferencia
+  // entre el frame actual y el frame retrasado
+  let lm=lmRaw;
+  if(sh.extrap&&sh.buf.length>di+4){
+    const lmCurrent=sh.buf[sh.buf.length-1];
+    const lmPrev=sh.buf[Math.max(0,sh.buf.length-1-di)];
+    // La sombra se mueve "más allá" multiplicando el vector de movimiento
+    lm=lmRaw.map((p,i)=>{
+      if(!p||!lmCurrent[i]||!lmPrev[i])return p;
+      const dx=(lmCurrent[i].x-lmPrev[i].x)*0.6; // amplitud de extrapolación
+      const dy=(lmCurrent[i].y-lmPrev[i].y)*0.6;
+      return{x:Math.max(0,Math.min(1,p.x+dx)),y:Math.max(0,Math.min(1,p.y+dy))};
+    });
+  }
+
   const px=(f,i)=>f[i]?((sh.mir?(1-f[i].x):f[i].x+0.3)+Math.sin(t*0.5+f[i].y*5)*sh.rnd*0.02)*W:0;
   const py=(f,i)=>f[i]?(f[i].y+Math.cos(t*0.6+f[i].x*5)*sh.rnd*0.015)*H:0;
   BSEGS.forEach(seg=>{
@@ -723,8 +745,9 @@ export default function App(){
   const S=useRef({
     layers:Array.from({length:NV},()=>({ld:false,nm:"",op:1,bl:"screen",vis:true})),
     body:{vis:true,op:0.8,bl:"screen"},
-    synOn:true,synVol:0.7,synDl:0.25,synRv:0.2,synKey:"C",synScale:"Pentatónica Menor",
+    synOn:false,synVol:0.7,synDl:0.25,synRv:0.2,synKey:"C",synScale:"Pentatónica Menor",
     melodyAtk:0.08,bassAtk:0.08,chordAtk:0.3,
+    droneOn:false,
     g:null,vAct:Array(NV).fill(false),vOp:Array(NV).fill(0),vManual:{},
     stopped:false,audioSilenced:false,curNote:"—",dbg:"init",poseCount:0,
     dancer2On:false,dancer2Color:"#F59E0B",dancer2:null,
@@ -734,9 +757,22 @@ export default function App(){
     poetryOn:true,anchorCD:0,lastPhrase:"",phraseTimer:0,
     icoOn:true,zonesOn:true,
     ghostProjectionOn:false,ghostBgVideoIdx:-1,ghostWorldOp:0.85,
-    loopOn:true,          // sistema de loops activo
-    tPoseCD:0,            // cooldown del gesto T-pose
-    activeLoopIdx:0,      // qué loop se graba/controla con T-pose
+    loopOn:true,tPoseCD:0,activeLoopIdx:0,
+    // Línea de tiempo de efectos (en segundos desde inicio del performance)
+    timeline:[
+      // {t:segundos, fx:{ghost, contraste, saturación, inversión, delay visual}}
+      // Ejemplos por defecto — editables desde el panel
+      {t:0,   fx:{ghost:0,   con:1,   sat:1,   inv:false, bodyOp:0.8}},
+      {t:30,  fx:{ghost:0.3, con:1.2, sat:0.8, inv:false, bodyOp:0.7}},
+      {t:60,  fx:{ghost:0.6, con:1.5, sat:0.4, inv:false, bodyOp:0.5}},
+      {t:90,  fx:{ghost:0,   con:2,   sat:0,   inv:true,  bodyOp:0.9}},
+      {t:120, fx:{ghost:0,   con:1,   sat:1,   inv:false, bodyOp:0.8}},
+    ],
+    timelineOn:false,   // se activa manualmente
+    timelineStart:null, // timestamp de inicio
+    tlCurrentFx:{ghost:0,con:1,sat:1,inv:false,bodyOp:0.8},
+    // Extrapolación de sombra
+    shadowExtrap:true,
   }).current;
 
   const wcRef=useRef(null);const pvRef=useRef(null);const outRef=useRef(null);const bcRef=useRef(null);
@@ -845,6 +881,8 @@ export default function App(){
       droneRef.current.setArc("deriva");
       // Inicializar loop recorder conectado al master del synth
       loopRef.current.init(syRef.current.c, syRef.current.m);
+      // Drone y synth arrancan apagados — Mariana los activa manualmente
+      droneRef.current.stop();
       setPhase("running");
     }catch(e){setLoadMsg("Error: "+e.message);}})();
     return()=>{dead=true;};
@@ -903,13 +941,19 @@ export default function App(){
       const playV=(role,sRole,note,int,atk)=>{if(sampler?.hasSample(role))sampler.playSample(role,note,int,atk);else syn.play(sRole,note,int,atk);};
       const relV=(role,sRole,rt)=>{if(sampler?.hasSample(role))sampler.relSample(role,rt);else syn.rel(sRole,rt);};
       if(g&&!g.stopA&&S.synOn&&!S.audioSilenced&&hasMotion){
-        if(g.bUp){const n=syn.noteAt(g.rP,3,4);playV("chord","chord",n,Math.min(1,g.hD*0.8),S.chordAtk);S.curNote=n?m2n(n.midi):"—";}else relV("chord","chord",0.8);
-        if(g.sq>0.2){playV("pad","sub",syn.noteAt(0.1,1,2),g.sq,S.bassAtk);}else relV("pad","sub",1);
-        if(g.rAct&&!g.bUp){const n=syn.noteAt(g.rP);if(g.rPlk&&performance.now()-plkTRef.current>100){if(sampler?.hasSample("pluck"))sampler.pluckSample("pluck",n,Math.min(1,g.spd.r/3));else syn.plk("pluck",n,Math.min(1,g.spd.r/3));plkTRef.current=performance.now();}else playV("melody","melody",n,0.3+g.spd.r*0.2,S.melodyAtk);S.curNote=n?m2n(n.midi):"—";if(g.hD>1.2)syn.arpTk(0.5);}
-        else if(!g.bUp){relV("melody","melody",0.4);}
+        // Mano derecha → melodía / pluck
+        if(g.rAct){const n=syn.noteAt(g.rP);if(g.rPlk&&performance.now()-plkTRef.current>100){if(sampler?.hasSample("pluck"))sampler.pluckSample("pluck",n,Math.min(1,g.spd.r/3));else syn.plk("pluck",n,Math.min(1,g.spd.r/3));plkTRef.current=performance.now();}else playV("melody","melody",n,0.3+g.spd.r*0.2,S.melodyAtk);S.curNote=n?m2n(n.midi):"—";if(g.hD>1.2)syn.arpTk(0.5);}
+        else{relV("melody","melody",0.4);}
+        // Mano izquierda extendida → bajo
         if(g.lExt){playV("bass","bass",syn.noteAt(g.lP,2,3),0.5,S.bassAtk);}else relV("bass","bass",0.5);
+        // Cadera (sentadilla) → sub / pad
+        if(g.sq>0.2){playV("pad","sub",syn.noteAt(0.1,1,2),g.sq,S.bassAtk);}else relV("pad","sub",0.8);
+        // Círculo brazo derecho → acordes
+        if(g.circleR){const n=syn.noteAt(g.rP,3,5);playV("chord","chord",n,0.85,S.chordAtk);S.curNote=n?m2n(n.midi):"—";}
+        // Círculo brazo izquierdo → pad armónico
+        if(g.circleL){const n=syn.noteAt(g.lP,2,4);playV("pad","sub",n,0.75,S.chordAtk);}
       }
-      if(g&&!g.stopA&&!hasMotion){syn.rel("melody",0.5);syn.rel("lead",0.5);syn.rel("bass",0.5);syn.rel("chord",0.8);syn.rel("sub",0.8);sampler?.relAll();S.curNote="—";}
+      if(!hasMotion||!S.synOn||S.audioSilenced){syn.rel("melody",0.5);syn.rel("bass",0.5);syn.rel("chord",0.8);syn.rel("sub",0.8);sampler?.relAll();S.curNote="—";}
       if(g?.stopA&&!S.stopped){S.stopped=true;syn.relAll();drone.stop();loopRef.current.stopAll();}
       if(!g?.stopA&&S.stopped){S.stopped=false;drone.resume();}
 
@@ -976,7 +1020,31 @@ export default function App(){
         particlesRef.current=particlesRef.current.filter(p=>!p.isDead());
       }
 
-      // DIBUJO
+      // ── Línea de tiempo de efectos ─────────────────────────────────
+      if(S.timelineOn){
+        if(!S.timelineStart)S.timelineStart=t;
+        const elapsed=t-S.timelineStart;
+        // Encontrar el keyframe activo y el siguiente para interpolar
+        const kfs=S.timeline;
+        let prev=kfs[0],next=kfs[kfs.length-1];
+        for(let i=0;i<kfs.length-1;i++){if(elapsed>=kfs[i].t&&elapsed<kfs[i+1].t){prev=kfs[i];next=kfs[i+1];break;}}
+        const span=Math.max(0.001,next.t-prev.t);
+        const prog=Math.min(1,(elapsed-prev.t)/span);
+        // Interpolar entre keyframes
+        const lerp=(a,b)=>a+(b-a)*prog;
+        S.tlCurrentFx={
+          ghost:lerp(prev.fx.ghost,next.fx.ghost),
+          con:lerp(prev.fx.con,next.fx.con),
+          sat:lerp(prev.fx.sat,next.fx.sat),
+          inv:prog>0.5?next.fx.inv:prev.fx.inv,
+          bodyOp:lerp(prev.fx.bodyOp,next.fx.bodyOp),
+        };
+        // Aplicar al estado visual
+        S.ghost=S.tlCurrentFx.ghost;
+        S.body.op=S.tlCurrentFx.bodyOp;
+      }
+
+      // ── DIBUJO ───────────────────────────────────────────────────────
       const palette=ARC_PALETTES[S.arc];
       if(S.ghost>0){
         ghostCtx.globalAlpha=1-S.ghost;ghostCtx.fillStyle="#000";ghostCtx.fillRect(0,0,W,H);
@@ -991,7 +1059,11 @@ export default function App(){
       S.layers.forEach((l,i)=>{const v=vRefs[i]?.current;if(!l.vis||!l.ld||!v||v.readyState<1)return;const a=l.op*(S.vOp[i]||0);if(a<0.005)return;ctx.globalAlpha=Math.min(1,a);ctx.globalCompositeOperation=l.bl;ctx.drawImage(v,0,0,W,H);});
       ctx.globalAlpha=1;ctx.globalCompositeOperation="source-over";
 
-      if(S.body.vis&&vid){const bc=bcRef.current;if(bc){if(bc.width!==W||bc.height!==H){bc.width=W;bc.height=H;}const bx=bc.getContext("2d");bx.save();bx.translate(W,0);bx.scale(-1,1);bx.drawImage(vid,0,0,W,H);bx.restore();ctx.save();ctx.globalAlpha=S.body.op;ctx.globalCompositeOperation=S.body.bl;ctx.drawImage(bc,0,0,W,H);ctx.restore();}}
+      if(S.body.vis&&vid){const bc=bcRef.current;if(bc){if(bc.width!==W||bc.height!==H){bc.width=W;bc.height=H;}const bx=bc.getContext("2d");bx.save();bx.translate(W,0);bx.scale(-1,1);
+        // Aplicar contraste de la timeline si está activa
+        if(S.timelineOn&&S.tlCurrentFx.con!==1){bx.filter=`contrast(${S.tlCurrentFx.con}) saturate(${S.tlCurrentFx.sat||1})${S.tlCurrentFx.inv?" invert(1)":""}`;}
+        bx.drawImage(vid,0,0,W,H);bx.restore();
+        ctx.save();ctx.globalAlpha=S.body.op;ctx.globalCompositeOperation=S.body.bl;ctx.drawImage(bc,0,0,W,H);ctx.restore();}}
 
       // Icosaedro sagrado
       if(S.icoOn&&g?.lm)drawIcosahedron(ctx,g.lm,W,H,palette,t,g.mt||0);
@@ -1014,7 +1086,11 @@ export default function App(){
 
       if(g?.lm)drawFluid(ctx,g.lm,W,H,palette.entityColor,S.entityOpacity,t,g.mt||0);
       if(S.dancer2On&&S.dancer2)drawFluid(ctx,S.dancer2,W,H,S.dancer2Color,S.entityOpacity*0.75,t,0.2);
-      if(S.shadowOn&&shRef.current.buf.length>3){shRef.current.mir=S.shadowMirror;shRef.current.rnd=S.shadowRandom;shRef.current.df=S.shadowDelay;drawGhost(ctx,shRef.current,W,H,palette.shadowColor,S.shadowOpacity,t);}
+      if(S.shadowOn&&shRef.current.buf.length>3){
+        shRef.current.mir=S.shadowMirror;shRef.current.rnd=S.shadowRandom;shRef.current.df=S.shadowDelay;
+        shRef.current.extrap=S.shadowExtrap;
+        drawGhost(ctx,shRef.current,W,H,palette.shadowColor,S.shadowOpacity,t);
+      }
 
       // Segunda proyección — canvas oculto → copia al popup
       if(S.ghostProjectionOn&&ghostCanvasRef.current){
@@ -1298,6 +1374,47 @@ export default function App(){
                 {S.dancer2On&&(<><span style={sLbl}>Color</span><ColorPick val={S.dancer2Color} onChange={c=>{S.dancer2Color=c;tk();}}/></>)}
                 <div style={{borderTop:`2px solid ${bdr}`,paddingTop:10,marginTop:4,fontWeight:700,marginBottom:8}}>Sombra IA</div>
                 <Tog on={S.shadowOn} color={CL[1]} label="Sombra activa" onTap={()=>{S.shadowOn=!S.shadowOn;tk();}}/>
+                {S.shadowOn&&<Tog on={S.shadowExtrap} color="#A855F7" label="Extrapolación (movimiento autónomo)" onTap={()=>{S.shadowExtrap=!S.shadowExtrap;tk();}}/>}
+
+                {/* ── LÍNEA DE TIEMPO ── */}
+                <div style={{borderTop:`2px solid ${bdr}`,paddingTop:10,marginTop:6}}>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+                    <span style={{fontSize:13,fontWeight:700}}>Línea de tiempo</span>
+                    <Tog on={S.timelineOn} color="#F59E0B" label="" onTap={()=>{
+                      S.timelineOn=!S.timelineOn;
+                      if(S.timelineOn)S.timelineStart=null; // reinicia al activar
+                      else{S.ghost=0;S.body.op=0.8;} // restaura al desactivar
+                      tk();
+                    }}/>
+                  </div>
+                  <div style={{fontSize:9,color:txS,marginBottom:8,lineHeight:1.5,background:"#F8FAFC",padding:"8px 10px",borderRadius:8}}>
+                    Programa efectos visuales por tiempo. Se activa con el toggle y corre desde cero. Edita los keyframes aquí.
+                  </div>
+                  {S.timeline.map((kf,i)=>(
+                    <div key={i} style={{display:"flex",gap:6,alignItems:"center",marginBottom:6,padding:"8px",borderRadius:8,border:`1px solid ${bdr}`,background:bgC}}>
+                      <div style={{fontSize:9,color:"#F59E0B",fontWeight:700,minWidth:28}}>{kf.t}s</div>
+                      <input type="number" value={kf.t} min={0} max={600} style={{width:40,background:"#F8FAFC",border:`1px solid ${bdr}`,color:txP,padding:"2px 4px",fontSize:9,borderRadius:4}}
+                        onChange={e=>{kf.t=parseInt(e.target.value)||0;S.timeline.sort((a,b)=>a.t-b.t);tk();}}/>
+                      <input type="range" min={0} max={0.95} step={0.05} value={kf.fx.ghost} title="Ghost"
+                        style={{width:36,accentColor:"#A855F7",height:6}} onChange={e=>{kf.fx.ghost=parseFloat(e.target.value);tk();}}/>
+                      <span style={{fontSize:8,color:txS}}>G:{kf.fx.ghost.toFixed(1)}</span>
+                      <input type="range" min={0.3} max={3} step={0.1} value={kf.fx.con} title="Contraste"
+                        style={{width:36,accentColor:CL[1],height:6}} onChange={e=>{kf.fx.con=parseFloat(e.target.value);tk();}}/>
+                      <span style={{fontSize:8,color:txS}}>C:{kf.fx.con.toFixed(1)}</span>
+                      <div onPointerDown={()=>{kf.fx.inv=!kf.fx.inv;tk();}}
+                        style={{fontSize:8,padding:"2px 5px",borderRadius:4,border:`1px solid ${kf.fx.inv?"#6366F1":bdr}`,color:kf.fx.inv?"#6366F1":txS,cursor:"pointer"}}>INV</div>
+                      <div onPointerDown={()=>{S.timeline.splice(i,1);tk();}}
+                        style={{fontSize:9,color:"#F43F5E",cursor:"pointer",marginLeft:"auto"}}>✕</div>
+                    </div>
+                  ))}
+                  <div onPointerDown={()=>{const last=S.timeline[S.timeline.length-1];S.timeline.push({t:(last?.t||0)+30,fx:{ghost:0,con:1,sat:1,inv:false,bodyOp:0.8}});tk();}}
+                    style={{cursor:"pointer",padding:"7px",borderRadius:8,background:"#F8FAFC",fontSize:9,color:txS,textAlign:"center",border:`1px solid ${bdr}`,marginTop:4}}>
+                    + Añadir keyframe
+                  </div>
+                  {S.timelineOn&&<div style={{marginTop:6,padding:"6px 10px",borderRadius:8,background:"#F59E0B10",border:`1px solid #F59E0B30`,fontSize:9,color:"#F59E0B"}}>
+                    ▶ Corriendo: {S.timelineStart?Math.floor(t-S.timelineStart)+"s":"—"}
+                  </div>}
+                </div>
                 {S.shadowOn&&(<>
                   <Tog on={S.shadowMirror} color={CL[3]} label="Espejo" onTap={()=>{S.shadowMirror=!S.shadowMirror;tk();}}/>
                   <FxS label="Retraso" val={S.shadowDelay} min={0.05} max={0.9} step={0.05} color={CL[1]} onChange={v=>{S.shadowDelay=v;tk();}}/>
