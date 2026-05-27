@@ -223,6 +223,110 @@ class Synth{
   get isEnabled(){return this.enabled!==false;}
 }
 
+// ── SamplePlayer ──────────────────────────────────────────────────────────
+// Carga samples de audio y los afina a cualquier nota usando playbackRate.
+// Si no hay sample cargado, el sintetizador original sigue como respaldo.
+// Referencia de afinación: el sample debe ser la nota C4 (Do central, 261.63 Hz)
+// Si el sample es otra nota, ajustar BASE_MIDI en loadSample().
+const SAMPLE_ROLES={
+  melody:{label:"Melodía (mano derecha)",color:"#10B981"},
+  chord: {label:"Armonía (brazos arriba)",color:"#3B82F6"},
+  bass:  {label:"Bajo (mano izquierda)", color:"#F59E0B"},
+  pluck: {label:"Pluck / Percusivo",     color:"#A855F7"},
+  pad:   {label:"Pad / Ambiente",        color:"#94A3B8"},
+};
+
+class SamplePlayer{
+  constructor(synth){
+    this.synth=synth;       // referencia al Synth original (fallback)
+    this.samples={};        // {role: {buffer, baseMidi, gainNode, activeNodes:[]}}
+    this.on=false;
+  }
+
+  get c(){return this.synth?.c;}
+
+  // Carga un archivo de audio para un rol específico
+  async loadSample(role,file){
+    if(!this.c)return;
+    try{
+      const arrayBuf=await file.arrayBuffer();
+      const decoded=await this.c.decodeAudioData(arrayBuf);
+      // Asumir que el sample es C4 (midi 60) — ajustable
+      this.samples[role]={buffer:decoded,baseMidi:60,gainNode:null,activeNodes:[]};
+      this.on=true;
+      return true;
+    }catch(e){console.warn("Sample load error:",e);return false;}
+  }
+
+  removeSample(role){
+    if(this.samples[role]){
+      this.samples[role].activeNodes.forEach(n=>{try{n.stop();}catch(e){}});
+      delete this.samples[role];
+    }
+    if(Object.keys(this.samples).length===0)this.on=false;
+  }
+
+  hasSample(role){return !!this.samples[role];}
+
+  // Toca una nota usando el sample, afinada con playbackRate
+  playSample(role,note,intensity,atk=0.05){
+    if(!this.c||!note||!this.samples[role])return false;
+    const s=this.samples[role];
+    const t=this.c.currentTime;
+    // playbackRate = 2^((targetMidi - baseMidi)/12)
+    const rate=Math.pow(2,(note.midi-s.baseMidi)/12);
+    // Detener nodo anterior de este rol
+    s.activeNodes.forEach(n=>{
+      try{n.gain.gain.setTargetAtTime(0,t,0.08);setTimeout(()=>{try{n.src.stop();}catch(e){}},300);}catch(e){}
+    });
+    s.activeNodes=[];
+    const src=this.c.createBufferSource();
+    src.buffer=s.buffer;
+    src.playbackRate.value=rate;
+    src.loop=false;
+    const gn=this.c.createGain();
+    gn.gain.setValueAtTime(0,t);
+    gn.gain.setTargetAtTime(Math.min(0.5,intensity*0.55),t,atk);
+    src.connect(gn);gn.connect(this.synth.comp);
+    if(this.synth.rv?.buffer)gn.connect(this.synth.rv);
+    gn.connect(this.synth.dl);
+    src.start(t);
+    s.activeNodes.push({src,gain:gn});
+    src.onended=()=>{s.activeNodes=s.activeNodes.filter(n=>n.src!==src);};
+    return true;
+  }
+
+  // Versión "pluck" — fade out rápido
+  pluckSample(role,note,intensity){
+    if(!this.c||!note||!this.samples[role])return false;
+    const s=this.samples[role];
+    const t=this.c.currentTime;
+    const rate=Math.pow(2,(note.midi-s.baseMidi)/12);
+    const src=this.c.createBufferSource();
+    src.buffer=s.buffer;src.playbackRate.value=rate;src.loop=false;
+    const gn=this.c.createGain();
+    gn.gain.setValueAtTime(Math.min(0.5,intensity*0.5),t);
+    gn.gain.exponentialRampToValueAtTime(0.001,t+1.2);
+    src.connect(gn);gn.connect(this.synth.comp);
+    if(this.synth.rv?.buffer)gn.connect(this.synth.rv);
+    src.start(t);
+    s.activeNodes.push({src,gain:gn});
+    return true;
+  }
+
+  // Detiene el sample de un rol
+  relSample(role,rt=0.3){
+    if(!this.samples[role])return;
+    const t=this.c.currentTime;
+    this.samples[role].activeNodes.forEach(n=>{
+      try{n.gain.gain.setTargetAtTime(0,t,rt);setTimeout(()=>{try{n.src.stop();}catch(e){}},rt*3000);}catch(e){}
+    });
+    this.samples[role].activeNodes=[];
+  }
+
+  relAll(){Object.keys(this.samples).forEach(r=>this.relSample(r,0.15));}
+}
+
 class Gest{
   constructor(){this.sm=null;this.spd={l:0,r:0};this.pw=null;this.stH=0;this.sqR=0;this.sqC=false;}
   d(a,b){return Math.sqrt((a.x-b.x)**2+(a.y-b.y)**2);}
@@ -639,6 +743,7 @@ export default function App(){
   const vRefs=Array.from({length:NV},()=>useRef(null));
   const cRef=useRef(null);const detRef=useRef(null);const streamRef=useRef(null);
   const gRef=useRef(new Gest());const syRef=useRef(new Synth());const shRef=useRef(new Shadow());const droneRef=useRef(new Drone());const loopRef=useRef(new LoopRecorder());
+  const samplerRef=useRef(null); // se crea después de que el synth esté listo
   const plkTRef=useRef(0);const animRef=useRef(null);const fpsR=useRef({c:0,t:performance.now()});
   const recRef=useRef(null);const recChunks=useRef([]);const recTimer=useRef(null);
   const ghostCRef=useRef(null);
@@ -735,6 +840,7 @@ export default function App(){
       setLoadMsg("Calentando modelo...");
       try{const tmp=document.createElement("canvas");tmp.width=192;tmp.height=192;await detRef.current.estimatePoses(tmp);await detRef.current.estimatePoses(tmp);}catch(e){}
       await syRef.current.init();
+      samplerRef.current=new SamplePlayer(syRef.current);
       await droneRef.current.init(syRef.current.c);
       droneRef.current.setArc("deriva");
       // Inicializar loop recorder conectado al master del synth
@@ -790,19 +896,20 @@ export default function App(){
         }
       }else if(!vid)S.dbg="no_video";
 
-      const g=S.g;const syn=syRef.current;const drone=droneRef.current;
+      const g=S.g;const syn=syRef.current;const drone=droneRef.current;const sampler=samplerRef.current;
       if(g&&!g.stopA)drone.modulate(g);
-      // Solo activa synth si hay movimiento real (mt > 0.08) — evita notas fantasma en quietud
       const hasMotion=(g?.mt||0)>0.08;
+      // Helpers: usa sample si existe, si no usa synth
+      const playV=(role,sRole,note,int,atk)=>{if(sampler?.hasSample(role))sampler.playSample(role,note,int,atk);else syn.play(sRole,note,int,atk);};
+      const relV=(role,sRole,rt)=>{if(sampler?.hasSample(role))sampler.relSample(role,rt);else syn.rel(sRole,rt);};
       if(g&&!g.stopA&&S.synOn&&!S.audioSilenced&&hasMotion){
-        if(g.bUp){const n=syn.noteAt(g.rP,3,4);syn.play("chord",n,Math.min(1,g.hD*0.8),S.chordAtk);S.curNote=n?m2n(n.midi):"—";}else syn.rel("chord",0.8);
-        if(g.sq>0.2)syn.play("sub",syn.noteAt(0.1,1,2),g.sq,S.bassAtk);else syn.rel("sub",1);
-        if(g.rAct&&!g.bUp){const n=syn.noteAt(g.rP);if(g.rPlk&&performance.now()-plkTRef.current>100){syn.plk("pluck",n,Math.min(1,g.spd.r/3));plkTRef.current=performance.now();}else syn.play("melody",n,0.3+g.spd.r*0.2,S.melodyAtk);S.curNote=n?m2n(n.midi):"—";if(g.hD>1.2)syn.arpTk(0.5);}
-        else if(!g.bUp){syn.rel("melody",0.4);}
-        if(g.lExt)syn.play("bass",syn.noteAt(g.lP,2,3),0.5,S.bassAtk);else syn.rel("bass",0.5);
+        if(g.bUp){const n=syn.noteAt(g.rP,3,4);playV("chord","chord",n,Math.min(1,g.hD*0.8),S.chordAtk);S.curNote=n?m2n(n.midi):"—";}else relV("chord","chord",0.8);
+        if(g.sq>0.2){playV("pad","sub",syn.noteAt(0.1,1,2),g.sq,S.bassAtk);}else relV("pad","sub",1);
+        if(g.rAct&&!g.bUp){const n=syn.noteAt(g.rP);if(g.rPlk&&performance.now()-plkTRef.current>100){if(sampler?.hasSample("pluck"))sampler.pluckSample("pluck",n,Math.min(1,g.spd.r/3));else syn.plk("pluck",n,Math.min(1,g.spd.r/3));plkTRef.current=performance.now();}else playV("melody","melody",n,0.3+g.spd.r*0.2,S.melodyAtk);S.curNote=n?m2n(n.midi):"—";if(g.hD>1.2)syn.arpTk(0.5);}
+        else if(!g.bUp){relV("melody","melody",0.4);}
+        if(g.lExt){playV("bass","bass",syn.noteAt(g.lP,2,3),0.5,S.bassAtk);}else relV("bass","bass",0.5);
       }
-      // Si no hay movimiento, libera todas las voces suavemente
-      if(g&&!g.stopA&&!hasMotion){syn.rel("melody",0.5);syn.rel("lead",0.5);syn.rel("bass",0.5);syn.rel("chord",0.8);syn.rel("sub",0.8);S.curNote="—";}
+      if(g&&!g.stopA&&!hasMotion){syn.rel("melody",0.5);syn.rel("lead",0.5);syn.rel("bass",0.5);syn.rel("chord",0.8);syn.rel("sub",0.8);sampler?.relAll();S.curNote="—";}
       if(g?.stopA&&!S.stopped){S.stopped=true;syn.relAll();drone.stop();loopRef.current.stopAll();}
       if(!g?.stopA&&S.stopped){S.stopped=false;drone.resume();}
 
@@ -1086,7 +1193,39 @@ export default function App(){
                 <FxS label="Reverb" val={S.synRv} min={0} max={0.8} step={0.01} color={CL[3]} onChange={v=>{S.synRv=v;syn.setRv(v);tk();}}/>
                 <Tog on={S.synOn} label="Sintetizador" onTap={()=>{S.synOn=!S.synOn;if(!S.synOn)syn.silence();else syn.unsilence();tk();}}/>
 
-                {/* ── LOOPS ── */}
+                {/* ── SAMPLES DE INSTRUMENTOS ── */}
+                <div style={{borderTop:`2px solid ${bdr}`,paddingTop:10,marginTop:6}}>
+                  <div style={{fontSize:13,fontWeight:700,marginBottom:4}}>Instrumentos (samples)</div>
+                  <div style={{fontSize:9,color:txS,marginBottom:10,lineHeight:1.6,background:"#F8FAFC",padding:"8px 10px",borderRadius:8}}>
+                    Carga un archivo .mp3 o .wav por instrumento. El sample debe ser una <strong>nota sostenida limpia</strong> (idealmente Do/C). Si no hay sample, usa el sintetizador.
+                  </div>
+                  {Object.entries(SAMPLE_ROLES).map(([role,info])=>{
+                    const hasSample=samplerRef.current?.hasSample(role);
+                    return(
+                      <div key={role} style={{marginBottom:8,padding:"10px 12px",borderRadius:10,border:`1px solid ${hasSample?info.color+"60":bdr}`,background:hasSample?info.color+"08":bgC}}>
+                        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:hasSample?6:0}}>
+                          <div style={{width:8,height:8,borderRadius:"50%",background:hasSample?info.color:bdr,flexShrink:0}}/>
+                          <span style={{fontSize:10,fontWeight:700,color:hasSample?info.color:txP,flex:1}}>{info.label}</span>
+                          {hasSample&&<div onPointerDown={()=>{samplerRef.current.removeSample(role);tk();}}
+                            style={{cursor:"pointer",fontSize:9,color:"#F43F5E",padding:"1px 6px",border:`1px solid #F43F5E30`,borderRadius:4}}>✕</div>}
+                        </div>
+                        <label style={{display:"block",padding:"7px",border:`1px dashed ${info.color}40`,borderRadius:7,cursor:"pointer",textAlign:"center",fontSize:9,color:hasSample?info.color:txS}}>
+                          {hasSample?"✓ Sample cargado — toca para reemplazar":"Cargar sample (.mp3 / .wav)"}
+                          <input type="file" accept="audio/*" style={{display:"none"}} onChange={async e=>{
+                            const f=e.target.files[0];if(!f||!samplerRef.current)return;
+                            const ok=await samplerRef.current.loadSample(role,f);
+                            if(ok)tk();
+                          }}/>
+                        </label>
+                      </div>
+                    );
+                  })}
+                  {samplerRef.current?.on&&<div onPointerDown={()=>{
+                    Object.keys(SAMPLE_ROLES).forEach(r=>samplerRef.current?.removeSample(r));tk();
+                  }} style={{cursor:"pointer",padding:"7px",borderRadius:8,background:"#F8FAFC",fontSize:9,color:"#F43F5E",textAlign:"center",border:`1px solid #F43F5E30`,marginTop:4}}>
+                    Quitar todos los samples → volver al sintetizador
+                  </div>}
+                </div>
                 <div style={{borderTop:`2px solid ${bdr}`,paddingTop:10,marginTop:6}}>
                   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
                     <span style={{fontSize:13,fontWeight:700}}>Loops en vivo</span>
