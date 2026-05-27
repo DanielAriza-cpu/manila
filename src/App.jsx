@@ -991,24 +991,28 @@ export default function App(){
       if(g?.stopA&&!S.stopped){S.stopped=true;syn.relAll();drone.stop();loopRef.current.stopAll();}
       if(!g?.stopA&&S.stopped){S.stopped=false;drone.resume();}
 
-      // ── Loops: gestos dedicados ────────────────────────────────────
-      // rUp sostenido 1.5s → graba/controla L activo
-      // bUp sostenido 1.5s → graba/controla L activo (alternativa)
+      // ── Loops: gesto de un solo disparo ───────────────────────────
+      // Brazo derecho arriba brevemente (rUp) → dispara acción del loop activo
+      // No necesita mantener el brazo — es un gesto puntual
       if(S.loopOn&&g&&!g.stopA&&!S.audioSilenced){
         if(S.tPoseCD>0)S.tPoseCD--;
-        // Brazo derecho arriba (rUp) activa el loop activo
         if(g.rUp&&!g.bUp&&S.tPoseCD<=0){
-          if(!S.loopRUpCount)S.loopRUpCount=0;
-          S.loopRUpCount++;
-          if(S.loopRUpCount>=20){ // ~1.3s sostenido
-            const lr=loopRef.current;
-            const loop=lr.loops[S.activeLoopIdx];
-            if(loop.recording){lr.stopRecord();}
-            else if(!loop.buffer){lr.startRecord(S.activeLoopIdx);}
-            else{lr.toggle(S.activeLoopIdx);}
-            S.tPoseCD=50;S.loopRUpCount=0;
+          const lr=loopRef.current;
+          const loop=lr.loops[S.activeLoopIdx];
+          if(loop.recording){
+            // Ya grabando → detener manualmente
+            lr.stopRecord();
+          }else if(!loop.buffer){
+            // Vacío → iniciar grabación (corre sola, no necesita mantener)
+            lr.startRecord(S.activeLoopIdx);
+          }else{
+            // Tiene buffer → toggle play/pause
+            lr.toggle(S.activeLoopIdx);
           }
-        }else{S.loopRUpCount=0;}
+          S.tPoseCD=45; // cooldown para evitar doble disparo
+        }
+        // Resetear contador (ya no se usa para hold)
+        S.loopRUpCount=0;
       }
 
       if(g&&!g.stopA){
@@ -1178,18 +1182,23 @@ export default function App(){
             });
             ctx.restore();
           }
-          // Indicador gesto de loop — barra de progreso mientras sostiene
+          // Indicador gesto loop activo
           if(S.loopOn&&g?.rUp&&!g?.bUp&&S.tPoseCD<=0){
-            const prog=Math.min(1,(S.loopRUpCount||0)/8);
-            ctx.save();
-            ctx.globalAlpha=0.85;
-            ctx.fillStyle="#1E293B";ctx.fillRect(W/2-80,H/2-18,160,36);
-            ctx.fillStyle="#A855F7";ctx.fillRect(W/2-76,H/2-8,152*prog,16);
-            ctx.fillStyle="#fff";ctx.font="bold 11px monospace";ctx.textAlign="center";
+            ctx.save();ctx.globalAlpha=0.85;
+            ctx.fillStyle="#A855F7";ctx.font="bold 12px monospace";ctx.textAlign="center";
             const lr=loopRef.current;
             const loop=lr?.loops[S.activeLoopIdx];
-            const loopLabel=loop?.recording?"● GRABANDO...":loop?.buffer?"▶/⏸ LOOP":"● INICIAR GRAB.";
-            ctx.fillText(`L${S.activeLoopIdx+1} — ${loopLabel}`,W/2,H/2+8);
+            const loopLabel=loop?.recording?"● STOP GRAB.":loop?.buffer?"▶/⏸ TOGGLE":"● GRABAR";
+            ctx.fillText(`L${S.activeLoopIdx+1} → ${loopLabel}`,W/2,H-28);
+            ctx.restore();
+          }
+          // Indicador grabando
+          const lr2=loopRef.current;
+          if(lr2?.loops?.some(l=>l.recording)){
+            const recIdx=lr2.loops.findIndex(l=>l.recording);
+            ctx.save();ctx.globalAlpha=0.9;
+            ctx.fillStyle="#F43F5E";ctx.font="bold 11px monospace";ctx.textAlign="left";
+            ctx.fillText(`● REC L${recIdx+1}`,12,H-28);
             ctx.restore();
           }
         }
