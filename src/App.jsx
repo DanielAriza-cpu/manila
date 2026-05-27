@@ -363,7 +363,7 @@ class Gest{
     if(this.circleCD.r<=0&&this._circ(this.rAngles)){circleR=true;this.circleCD.r=60;this.rAngles=[];}
     if(this.circleCD.l<=0&&this._circ(this.lAngles)){circleL=true;this.circleCD.l=60;this.lAngles=[];}
     if(cross)this.stH=Math.min(40,this.stH+1);else this.stH=Math.max(0,this.stH-2);
-    return{rP,lP,spd:this.spd,hD,bUp,lExt,rExt,cross,crossChest,xAbove,tPose,sq,circleR,circleL,stopA:this.stH>=25,stopH:this.stH,lAct:this.spd.l>0.3,rAct:this.spd.r>0.2,rPlk:this.spd.r>2,rUp:wr.y<sr.y-0.1,vA:lExt,vB:rExt,vC:bUp,vD:sq>0.15,lm:m,mt:Math.min(1,(this.spd.l+this.spd.r)/6)};
+    return{rP,lP,spd:this.spd,hD,bUp,lExt,rExt,cross,crossChest,xAbove,tPose,sq,circleR,circleL,stopA:this.stH>=25,stopH:this.stH,lAct:this.spd.l>0.5,rAct:this.spd.r>0.5,rPlk:this.spd.r>2.5,rUp:wr.y<sr.y-0.1,vA:lExt,vB:rExt,vC:bUp,vD:sq>0.15,lm:m,mt:Math.min(1,(this.spd.l+this.spd.r)/6)};
   }
 }
 
@@ -953,14 +953,23 @@ export default function App(){
 
       const g=S.g;const syn=syRef.current;const drone=droneRef.current;const sampler=samplerRef.current;
       if(g&&!g.stopA)drone.modulate(g);
-      const hasMotion=(g?.mt||0)>0.08;
+      const hasMotion=(g?.mt||0)>0.12;
       // Helpers: usa sample si existe, si no usa synth
       const playV=(role,sRole,note,int,atk)=>{if(sampler?.hasSample(role))sampler.playSample(role,note,int,atk);else syn.play(sRole,note,int,atk);};
       const relV=(role,sRole,rt)=>{if(sampler?.hasSample(role))sampler.relSample(role,rt);else syn.rel(sRole,rt);};
       if(g&&!g.stopA&&S.synOn&&!S.audioSilenced&&hasMotion){
-        // Mano derecha → melodía / pluck
-        if(g.rAct){const n=syn.noteAt(g.rP);if(g.rPlk&&performance.now()-plkTRef.current>100){if(sampler?.hasSample("pluck"))sampler.pluckSample("pluck",n,Math.min(1,g.spd.r/3));else syn.plk("pluck",n,Math.min(1,g.spd.r/3));plkTRef.current=performance.now();}else playV("melody","melody",n,0.3+g.spd.r*0.2,S.melodyAtk);S.curNote=n?m2n(n.midi):"—";if(g.hD>1.2)syn.arpTk(0.5);}
-        else{relV("melody","melody",0.4);}
+        // Mano derecha → melodía / pluck (solo si NO está haciendo gesto de loop)
+        const loopGestureActive=S.loopOn&&g.rUp&&!g.bUp&&S.tPoseCD<=0;
+        if(g.rAct&&!loopGestureActive){
+          const n=syn.noteAt(g.rP);
+          if(g.rPlk&&performance.now()-plkTRef.current>100){
+            if(sampler?.hasSample("pluck"))sampler.pluckSample("pluck",n,Math.min(1,g.spd.r/3));
+            else syn.plk("pluck",n,Math.min(1,g.spd.r/3));
+            plkTRef.current=performance.now();
+          }else playV("melody","melody",n,0.3+g.spd.r*0.2,S.melodyAtk);
+          S.curNote=n?m2n(n.midi):"—";
+          if(g.hD>1.2)syn.arpTk(0.5);
+        }else{relV("melody","melody",0.4);}
         // Mano izquierda extendida → bajo
         if(g.lExt){playV("bass","bass",syn.noteAt(g.lP,2,3),0.5,S.bassAtk);}else relV("bass","bass",0.5);
         // Cadera (sentadilla) → sub / pad
@@ -1161,11 +1170,18 @@ export default function App(){
             });
             ctx.restore();
           }
-          // Indicador T-pose activo
-          if(g?.tPose){
-            ctx.save();ctx.globalAlpha=0.8;
-            ctx.fillStyle="#A855F7";ctx.font="bold 11px monospace";ctx.textAlign="center";
-            ctx.fillText(`T ← L${S.activeLoopIdx+1}`,W/2,H-30);
+          // Indicador gesto de loop — barra de progreso mientras sostiene
+          if(S.loopOn&&g?.rUp&&!g?.bUp&&S.tPoseCD<=0){
+            const prog=Math.min(1,(S.loopRUpCount||0)/8);
+            ctx.save();
+            ctx.globalAlpha=0.85;
+            ctx.fillStyle="#1E293B";ctx.fillRect(W/2-80,H/2-18,160,36);
+            ctx.fillStyle="#A855F7";ctx.fillRect(W/2-76,H/2-8,152*prog,16);
+            ctx.fillStyle="#fff";ctx.font="bold 11px monospace";ctx.textAlign="center";
+            const lr=loopRef.current;
+            const loop=lr?.loops[S.activeLoopIdx];
+            const loopLabel=loop?.recording?"● GRABANDO...":loop?.buffer?"▶/⏸ LOOP":"● INICIAR GRAB.";
+            ctx.fillText(`L${S.activeLoopIdx+1} — ${loopLabel}`,W/2,H/2+8);
             ctx.restore();
           }
         }
