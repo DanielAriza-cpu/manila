@@ -410,6 +410,7 @@ class LoopRecorder{
   async _buildBuffer(idx){
     if(!this.recChunks.length)return;
     const blob=new Blob(this.recChunks,{type:"audio/webm"});
+    this.loops[idx].blob=blob; // guardar para descarga
     const arrayBuf=await blob.arrayBuffer();
     try{
       const decoded=await this.c.decodeAudioData(arrayBuf);
@@ -447,7 +448,15 @@ class LoopRecorder{
   }
   clear(idx){
     if(!this.on||idx<0||idx>=this.MAX)return;
-    this.stopLoop(idx);this.loops[idx].buffer=null;
+    this.stopLoop(idx);this.loops[idx].buffer=null;this.loops[idx].blob=null;
+  }
+  // Descarga el audio del loop como archivo .webm
+  download(idx){
+    if(!this.loops[idx]?.blob)return;
+    const u=URL.createObjectURL(this.loops[idx].blob);
+    const a=document.createElement("a");a.href=u;
+    a.download=`korpsound-loop${idx+1}-${Date.now()}.webm`;
+    a.click();URL.revokeObjectURL(u);
   }
   setVol(idx,vol){
     if(!this.on||idx<0||idx>=this.MAX)return;
@@ -589,14 +598,22 @@ function drawGhost(ctx,sh,W,H,color,alpha,t){
     for(let j=0;j<pts.length-1;j++){
       const a=pts[j],b=pts[j+1];if(!lm[a]||!lm[b])return;
       const ax=px(lm,a),ay=py(lm,a),bx=px(lm,b),by=py(lm,b);
-      ctx.globalAlpha=alpha*0.45;ctx.beginPath();ctx.moveTo(ax,ay);
+      // Línea gruesa exterior (halo)
+      ctx.globalAlpha=alpha*0.35;ctx.beginPath();ctx.moveTo(ax,ay);
       ctx.quadraticCurveTo((ax+bx)/2+Math.sin(t*2+j)*4,(ay+by)/2+Math.cos(t+j)*3,bx,by);
-      ctx.strokeStyle=rgba(0.5);ctx.lineWidth=seg.w*7+1;ctx.lineCap="round";ctx.stroke();
+      ctx.strokeStyle=rgba(0.4);ctx.lineWidth=seg.w*18+6;ctx.lineCap="round";ctx.stroke();
+      // Línea central brillante
+      ctx.globalAlpha=alpha*0.85;ctx.beginPath();ctx.moveTo(ax,ay);
+      ctx.quadraticCurveTo((ax+bx)/2+Math.sin(t*2+j)*4,(ay+by)/2+Math.cos(t+j)*3,bx,by);
+      ctx.strokeStyle=rgba(0.9);ctx.lineWidth=seg.w*5+2;ctx.stroke();
     }
   });
-  [0,9,10].forEach((i,k)=>{if(!lm[i])return;const x=px(lm,i),y=py(lm,i),r=(i===0?18:13)*(Math.sin(t*2+k)*0.15+0.85);
-    const g=ctx.createRadialGradient(x,y,0,x,y,r);g.addColorStop(0,rgba(0.35));g.addColorStop(0.5,rgba(0.1));g.addColorStop(1,rgba(0));
-    ctx.globalAlpha=alpha;ctx.fillStyle=g;ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();});
+  [0,9,10].forEach((i,k)=>{if(!lm[i])return;const x=px(lm,i),y=py(lm,i),r=(i===0?22:16)*(Math.sin(t*2+k)*0.15+0.85);
+    const g=ctx.createRadialGradient(x,y,0,x,y,r*1.8);g.addColorStop(0,rgba(0.9));g.addColorStop(0.4,rgba(0.4));g.addColorStop(1,rgba(0));
+    ctx.globalAlpha=alpha;ctx.fillStyle=g;ctx.beginPath();ctx.arc(x,y,r*1.8,0,Math.PI*2);ctx.fill();
+    // Núcleo sólido
+    ctx.globalAlpha=alpha*0.95;ctx.fillStyle=rgba(1);ctx.beginPath();ctx.arc(x,y,r*0.4,0,Math.PI*2);ctx.fill();
+  });
   ctx.restore();
 }
 
@@ -757,7 +774,7 @@ export default function App(){
     poetryOn:true,anchorCD:0,lastPhrase:"",phraseTimer:0,
     icoOn:true,zonesOn:true,
     ghostProjectionOn:false,ghostBgVideoIdx:-1,ghostWorldOp:0.85,
-    loopOn:true,tPoseCD:0,activeLoopIdx:0,
+    loopOn:true,tPoseCD:0,activeLoopIdx:0,loopRUpCount:0,
     // Línea de tiempo de efectos (en segundos desde inicio del performance)
     timeline:[
       // {t:segundos, fx:{ghost, contraste, saturación, inversión, delay visual}}
@@ -957,21 +974,24 @@ export default function App(){
       if(g?.stopA&&!S.stopped){S.stopped=true;syn.relAll();drone.stop();loopRef.current.stopAll();}
       if(!g?.stopA&&S.stopped){S.stopped=false;drone.resume();}
 
-      // ── Loops: T-pose → graba/controla el loop activo ─────────────
-      if(S.loopOn&&g&&!g.stopA){
+      // ── Loops: gestos dedicados ────────────────────────────────────
+      // rUp sostenido 1.5s → graba/controla L activo
+      // bUp sostenido 1.5s → graba/controla L activo (alternativa)
+      if(S.loopOn&&g&&!g.stopA&&!S.audioSilenced){
         if(S.tPoseCD>0)S.tPoseCD--;
-        if(g.tPose&&S.tPoseCD<=0){
-          const lr=loopRef.current;
-          const loop=lr.loops[S.activeLoopIdx];
-          if(loop.recording){
-            lr.stopRecord();
-          }else if(!loop.buffer){
-            lr.startRecord(S.activeLoopIdx);
-          }else{
-            lr.toggle(S.activeLoopIdx);
+        // Brazo derecho arriba (rUp) activa el loop activo
+        if(g.rUp&&!g.bUp&&S.tPoseCD<=0){
+          if(!S.loopRUpCount)S.loopRUpCount=0;
+          S.loopRUpCount++;
+          if(S.loopRUpCount>=8){ // ~0.5s sostenido
+            const lr=loopRef.current;
+            const loop=lr.loops[S.activeLoopIdx];
+            if(loop.recording){lr.stopRecord();}
+            else if(!loop.buffer){lr.startRecord(S.activeLoopIdx);}
+            else{lr.toggle(S.activeLoopIdx);}
+            S.tPoseCD=50;S.loopRUpCount=0;
           }
-          S.tPoseCD=40; // ~1.3 seg de cooldown
-        }
+        }else{S.loopRUpCount=0;}
       }
 
       if(g&&!g.stopA){
@@ -1308,7 +1328,8 @@ export default function App(){
                     <Tog on={S.loopOn} color="#A855F7" label="" onTap={()=>{S.loopOn=!S.loopOn;if(!S.loopOn)loopRef.current.stopAll();tk();}}/>
                   </div>
                   <div style={{fontSize:9,color:txS,marginBottom:10,lineHeight:1.6,background:"#F8FAFC",padding:"8px 10px",borderRadius:8}}>
-                    <div><strong style={{color:"#A855F7"}}>T-pose</strong> (brazos horizontales a ambos lados) → graba / para el loop activo</div>
+                    <div><strong style={{color:"#A855F7"}}>↑ Brazo D arriba sostenido (~0.5s)</strong> → graba / pausa / activa el loop seleccionado</div>
+                    <div>Selecciona L1–L4 y luego usa el gesto para grabar</div>
                     <div>Duración de grabación: <strong>4 seg</strong></div>
                   </div>
 
@@ -1328,8 +1349,9 @@ export default function App(){
                   {loopRef.current.loops.map((loop,i)=>{
                     const isActive=S.activeLoopIdx===i;
                     const color=loop.recording?"#F43F5E":loop.active?"#A855F7":loop.buffer?"#94A3B8":bdr;
+                    const hasSomething=loop.active||loop.recording||loop.buffer;
                     return(
-                      <div key={i} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,padding:"8px 10px",borderRadius:8,border:`1px solid ${color}30`,background:loop.active||loop.recording?"#A855F708":bgC}}>
+                      <div key={i} style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,padding:"8px 10px",borderRadius:8,border:`1px solid ${color}30`,background:hasSomething?"#A855F708":bgC}}>
                         {/* Indicador estado */}
                         <div style={{width:8,height:8,borderRadius:"50%",background:color,flexShrink:0,
                           boxShadow:loop.recording?`0 0 6px #F43F5E`:loop.active?`0 0 6px #A855F7`:"none"}}/>
@@ -1344,6 +1366,9 @@ export default function App(){
                         {/* Borrar */}
                         {loop.buffer&&<div onPointerDown={()=>{loopRef.current.clear(i);tk();}}
                           style={{cursor:"pointer",fontSize:10,color:"#F43F5E",padding:"2px 6px",border:`1px solid #F43F5E30`,borderRadius:4}}>✕</div>}
+                        {/* Descargar */}
+                        {loop.blob&&<div onPointerDown={()=>loopRef.current.download(i)}
+                          style={{cursor:"pointer",fontSize:10,color:"#3B82F6",padding:"2px 6px",border:`1px solid #3B82F630`,borderRadius:4}}>↓</div>}
                         {/* Play/Pause manual */}
                         {loop.buffer&&!loop.recording&&<div onPointerDown={()=>{loopRef.current.toggle(i);tk();}}
                           style={{cursor:"pointer",fontSize:10,color:"#A855F7",padding:"2px 6px",border:`1px solid #A855F730`,borderRadius:4}}>
