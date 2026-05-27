@@ -376,14 +376,15 @@ class LoopRecorder{
     this.on=false;this.recordingIdx=null;this.mediaRecorder=null;this.recChunks=[];
     this.destNode=null; // MediaStreamDestination
   }
-  init(audioCtx,sourceNode){
+  init(audioCtx,compNode){
     if(this.on)return;
     this.c=audioCtx;
-    // Crear destino de stream limpio — sin ScriptProcessor
+    this.compNode=compNode; // compresor — para grabar audio pre-master
+    // Crear destino de stream para grabación
     this.destNode=this.c.createMediaStreamDestination();
-    sourceNode.connect(this.destNode);
+    compNode.connect(this.destNode);
     for(let i=0;i<this.MAX;i++)
-      this.loops.push({buffer:null,sourceNode:null,gainNode:null,active:false,recording:false,vol:0.8});
+      this.loops.push({buffer:null,sourceNode:null,gainNode:null,active:false,recording:false,vol:0.8,blob:null});
     this.on=true;
   }
   startRecord(idx){
@@ -424,7 +425,8 @@ class LoopRecorder{
     const loop=this.loops[idx];
     const src=this.c.createBufferSource();src.buffer=loop.buffer;src.loop=true;
     const gn=this.c.createGain();gn.gain.value=loop.vol;
-    src.connect(gn);gn.connect(this.c.destination);src.start();
+    // Conectar al compresor para que el audio pase por el master del synth
+    src.connect(gn);gn.connect(this.compNode||this.c.destination);src.start();
     loop.sourceNode=src;loop.gainNode=gn;loop.active=true;
   }
   stopLoop(idx){
@@ -896,7 +898,7 @@ export default function App(){
       await syRef.current.init();
       samplerRef.current=new SamplePlayer(syRef.current);
       await droneRef.current.init(syRef.current.c);
-      loopRef.current.init(syRef.current.c, syRef.current.m);
+      loopRef.current.init(syRef.current.c, syRef.current.comp);
       // Todo arranca en silencio — Mariana activa manualmente
       droneRef.current.stop();
       syRef.current.silence();
