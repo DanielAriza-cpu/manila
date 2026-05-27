@@ -209,12 +209,18 @@ class Synth{
   plk(nm,note,int){if(!this.on||!note)return;const t=this.c.currentTime;const v=this.v[nm];if(!v?.osc)return;v.osc.frequency.setTargetAtTime(note.freq,t,0.002);v.gain.gain.cancelScheduledValues(t);v.gain.gain.setValueAtTime(Math.min(0.35,int*0.4),t);v.gain.gain.exponentialRampToValueAtTime(0.001,t+0.3);}
   arpTk(int){if(!this.on)return;const now=performance.now();if(now-this.arpT<60000/(this.arpBPM*2))return;this.arpT=now;const ns=this.notes.filter(n=>n.midi>=this.key+36&&n.midi<=this.key+60);if(!ns.length)return;this.arpI=(this.arpI+1)%ns.length;this.plk("pluck",ns[this.arpI],int);}
   rel(nm,rt=0.3){if(!this.on)return;const v=this.v[nm];if(!v)return;v.gain.gain.setTargetAtTime(0,this.c.currentTime,rt);if(v.filter)v.filter.frequency.setTargetAtTime(80,this.c.currentTime,rt);}
-  relAll(){if(!this.on)return;Object.keys(this.v).forEach(n=>this.rel(n,0.2));}
+  relAll(){if(!this.on)return;Object.keys(this.v).forEach(n=>this.rel(n,0.1));}
+  // Silencio total inmediato — corta la ganancia maestra
+  silence(){if(!this.on)return;this.m.gain.cancelScheduledValues(this.c.currentTime);this.m.gain.setValueAtTime(0,this.c.currentTime);this.relAll();}
+  // Restaura el volumen
+  unsilence(){if(!this.on)return;this.m.gain.setTargetAtTime(this.vol,this.c.currentTime,0.3);}
   chS(s){this.sn=s;this.build();}chK(k){this.key=KS[k];this.build();}
-  setV(v){if(this.m)this.m.gain.setTargetAtTime(v,this.c.currentTime,0.05);}
+  setV(v){this.vol=v;if(this.m)this.m.gain.setTargetAtTime(v,this.c.currentTime,0.05);}
   setDl(v){if(this.dlG)this.dlG.gain.setTargetAtTime(v,this.c.currentTime,0.05);}
   setRv(v){if(this.rvG)this.rvG.gain.setTargetAtTime(v,this.c.currentTime,0.05);}
-}
+  // Toggle activo — si está desactivado, silencio inmediato
+  setEnabled(on){this.enabled=on;if(!on)this.silence();else this.unsilence();}
+  get isEnabled(){return this.enabled!==false;}
 
 class Gest{
   constructor(){this.sm=null;this.spd={l:0,r:0};this.pw=null;this.stH=0;this.sqR=0;this.sqC=false;}
@@ -240,13 +246,13 @@ class Gest{
     // Cruce en el pecho: muñecas cruzadas entre hombros y caderas, a altura del pecho
     const chestY=(sl.y+hl.y)/2;
     const crossChest=this.d(wl,wr)<sW*0.6&&Math.abs((wl.y+wr.y)/2-chestY)<0.12&&wl.y>sl.y&&wr.y>sr.y&&!bUp;
-    // Cruce sobre la cabeza: muñecas cruzadas por encima de los hombros
-    const crossAbove=this.d(wl,wr)<sW*0.7&&wl.y<sl.y-0.05&&wr.y<sr.y-0.05&&this.d(wl,wr)<sW*0.5;
+    // X sobre la cabeza: brazos arriba Y cruzados (muñecas cruzadas por encima de hombros)
+    const xAbove=wl.y<sl.y-0.08&&wr.y<sr.y-0.08&&this.d(wl,wr)<sW*0.5&&((wl.x>wr.x&&wl.x-wr.x>sW*0.1)||(wr.x>wl.x&&wr.x-wl.x>sW*0.1));
     const sq=Math.max(0,Math.min(1,((hl.y+hr.y)/2-this.sqR)/0.1));
     // T-pose: brazos extendidos horizontalmente a ambos lados simultáneamente
     const tPose=lExt&&rExt&&Math.abs(wl.y-sl.y)<0.12&&Math.abs(wr.y-sr.y)<0.12;
     if(cross)this.stH=Math.min(40,this.stH+1);else this.stH=Math.max(0,this.stH-2);
-    return{rP,lP,spd:this.spd,hD,bUp,lExt,rExt,cross,crossChest,crossAbove,tPose,sq,stopA:this.stH>=25,stopH:this.stH,lAct:this.spd.l>0.3,rAct:this.spd.r>0.2,rPlk:this.spd.r>2,rUp:wr.y<sr.y-0.1,vA:lExt,vB:rExt,vC:bUp,vD:sq>0.15,lm:m,mt:Math.min(1,(this.spd.l+this.spd.r)/6)};
+    return{rP,lP,spd:this.spd,hD,bUp,lExt,rExt,cross,crossChest,xAbove,tPose,sq,stopA:this.stH>=25,stopH:this.stH,lAct:this.spd.l>0.3,rAct:this.spd.r>0.2,rPlk:this.spd.r>2,rUp:wr.y<sr.y-0.1,vA:lExt,vB:rExt,vC:bUp,vD:sq>0.15,lm:m,mt:Math.min(1,(this.spd.l+this.spd.r)/6)};
   }
 }
 
@@ -255,137 +261,89 @@ class Gest{
 // durante un tiempo definido y lo reproduce en bucle indefinidamente.
 class LoopRecorder{
   constructor(){
-    this.c=null;          // AudioContext compartido
-    this.loops=[];        // [{buffer, sourceNode, gainNode, active, recording, label}]
-    this.MAX=4;
-    this.REC_DURATION=4;  // segundos de grabación por loop
-    this.on=false;
-    this.recordingIdx=null;
-    this.recStartTime=null;
-    this.inputNode=null;  // nodo fuente que conectamos para grabar
-    this.processor=null;  // ScriptProcessorNode para capturar muestras
-    this.recSamples=[];
+    this.c=null;this.loops=[];this.MAX=4;this.REC_DURATION=4;
+    this.on=false;this.recordingIdx=null;this.mediaRecorder=null;this.recChunks=[];
+    this.destNode=null; // MediaStreamDestination
   }
-
-  init(audioCtx, sourceNode){
+  init(audioCtx,sourceNode){
     if(this.on)return;
     this.c=audioCtx;
-    this.inputNode=sourceNode;
-    // Inicializar 4 slots vacíos
-    for(let i=0;i<this.MAX;i++){
-      this.loops.push({buffer:null,sourceNode:null,gainNode:null,active:false,recording:false,label:`LOOP ${i+1}`,vol:0.8});
-    }
+    // Crear destino de stream limpio — sin ScriptProcessor
+    this.destNode=this.c.createMediaStreamDestination();
+    sourceNode.connect(this.destNode);
+    for(let i=0;i<this.MAX;i++)
+      this.loops.push({buffer:null,sourceNode:null,gainNode:null,active:false,recording:false,vol:0.8});
     this.on=true;
   }
-
-  // Inicia grabación de un slot
   startRecord(idx){
     if(!this.on||idx<0||idx>=this.MAX)return;
-    if(this.recordingIdx!==null)this.stopRecord(); // detener grabación previa
-    // Detener loop si estaba corriendo
+    if(this.recordingIdx!==null)this.stopRecord();
     this.stopLoop(idx);
-    this.loops[idx].recording=true;
-    this.recordingIdx=idx;
-    this.recSamples=[];
-    this.recStartTime=this.c.currentTime;
-    // Grabar via ScriptProcessor (compatible con todos los browsers)
-    const bufSize=4096;
-    this.processor=this.c.createScriptProcessor(bufSize,1,1);
-    this.processor.onaudioprocess=(e)=>{
-      if(this.recordingIdx===null)return;
-      const elapsed=this.c.currentTime-this.recStartTime;
-      if(elapsed>=this.REC_DURATION){this.stopRecord();return;}
-      const data=e.inputBuffer.getChannelData(0);
-      this.recSamples.push(new Float32Array(data));
-    };
-    this.inputNode.connect(this.processor);
-    this.processor.connect(this.c.destination);
+    this.loops[idx].recording=true;this.recordingIdx=idx;this.recChunks=[];
+    try{
+      const mr=new MediaRecorder(this.destNode.stream,{mimeType:"audio/webm"});
+      mr.ondataavailable=e=>{if(e.data.size>0)this.recChunks.push(e.data);};
+      mr.onstop=()=>this._buildBuffer(idx);
+      this.mediaRecorder=mr;
+      mr.start();
+      setTimeout(()=>{if(this.recordingIdx===idx)this.stopRecord();},this.REC_DURATION*1000);
+    }catch(e){console.warn("Loop rec error:",e);this.loops[idx].recording=false;this.recordingIdx=null;}
   }
-
-  // Detiene la grabación y construye el buffer
   stopRecord(){
     if(!this.on||this.recordingIdx===null)return;
-    const idx=this.recordingIdx;
-    this.recordingIdx=null;
+    const idx=this.recordingIdx;this.recordingIdx=null;
     this.loops[idx].recording=false;
-    if(this.processor){
-      try{this.inputNode.disconnect(this.processor);}catch(e){}
-      try{this.processor.disconnect();}catch(e){}
-      this.processor=null;
-    }
-    if(this.recSamples.length===0)return;
-    // Construir AudioBuffer con las muestras grabadas
-    const sr=this.c.sampleRate;
-    const total=this.recSamples.reduce((s,a)=>s+a.length,0);
-    const buf=this.c.createBuffer(1,total,sr);
-    const ch=buf.getChannelData(0);
-    let offset=0;
-    this.recSamples.forEach(s=>{ch.set(s,offset);offset+=s.length;});
-    this.loops[idx].buffer=buf;
-    this.recSamples=[];
-    // Iniciar reproducción inmediatamente
-    this.playLoop(idx);
+    if(this.mediaRecorder?.state==="recording"){try{this.mediaRecorder.stop();}catch(e){}}
+    this.mediaRecorder=null;
   }
-
-  // Reproduce un loop en bucle
+  async _buildBuffer(idx){
+    if(!this.recChunks.length)return;
+    const blob=new Blob(this.recChunks,{type:"audio/webm"});
+    const arrayBuf=await blob.arrayBuffer();
+    try{
+      const decoded=await this.c.decodeAudioData(arrayBuf);
+      this.loops[idx].buffer=decoded;
+      this.playLoop(idx);
+    }catch(e){console.warn("Loop decode error:",e);}
+  }
   playLoop(idx){
     if(!this.on||!this.loops[idx]?.buffer)return;
-    this.stopLoop(idx); // detener instancia previa
+    this.stopLoop(idx);
     const loop=this.loops[idx];
-    const src=this.c.createBufferSource();
-    src.buffer=loop.buffer;
-    src.loop=true;
-    const gn=this.c.createGain();
-    gn.gain.value=loop.vol;
-    src.connect(gn);gn.connect(this.c.destination);
-    src.start();
+    const src=this.c.createBufferSource();src.buffer=loop.buffer;src.loop=true;
+    const gn=this.c.createGain();gn.gain.value=loop.vol;
+    src.connect(gn);gn.connect(this.c.destination);src.start();
     loop.sourceNode=src;loop.gainNode=gn;loop.active=true;
   }
-
-  // Detiene un loop
   stopLoop(idx){
     if(!this.on||idx<0||idx>=this.MAX)return;
     const loop=this.loops[idx];
-    if(loop.sourceNode){
-      try{loop.sourceNode.stop();}catch(e){}
-      loop.sourceNode=null;
-    }
+    if(loop.sourceNode){try{loop.sourceNode.stop();}catch(e){}loop.sourceNode=null;}
     loop.active=false;
   }
-
-  // Toggle: si tiene buffer y está activo → para. Si no → inicia grabación.
-  // Si tiene buffer y está parado → reproduce de nuevo.
   toggle(idx){
     if(!this.on||idx<0||idx>=this.MAX)return;
     const loop=this.loops[idx];
-    if(loop.recording){this.stopRecord();return;}
-    if(loop.active){this.stopLoop(idx);}
+    if(loop.recording){this.stopRecord();}
+    else if(loop.active){this.stopLoop(idx);}
     else if(loop.buffer){this.playLoop(idx);}
     else{this.startRecord(idx);}
   }
-
-  // Para todos los loops
   stopAll(){
     if(!this.on)return;
     if(this.recordingIdx!==null)this.stopRecord();
     for(let i=0;i<this.MAX;i++)this.stopLoop(i);
   }
-
-  // Borra un loop completamente
   clear(idx){
     if(!this.on||idx<0||idx>=this.MAX)return;
-    this.stopLoop(idx);
-    this.loops[idx].buffer=null;
+    this.stopLoop(idx);this.loops[idx].buffer=null;
   }
-
   setVol(idx,vol){
     if(!this.on||idx<0||idx>=this.MAX)return;
     this.loops[idx].vol=vol;
     if(this.loops[idx].gainNode)this.loops[idx].gainNode.gain.setTargetAtTime(vol,this.c.currentTime,0.05);
   }
-
-  // Estado para el UI
-  getState(){return this.loops.map((l,i)=>({idx:i,active:l.active,recording:l.recording,hasBuffer:!!l.buffer,vol:l.vol,label:l.label}));}
+  getState(){return this.loops.map((l,i)=>({idx:i,active:l.active,recording:l.recording,hasBuffer:!!l.buffer,vol:l.vol}));}
 }
 
 class Drone{
@@ -876,57 +834,34 @@ export default function App(){
           });
         }
         // Cruce sobre la cabeza → silencio total (synth + drone)
-        if(g.crossAbove&&!S.audioSilenced){
+        if(g.xAbove&&!S.audioSilenced){
           S.audioSilenced=true;
-          syRef.current.relAll();
+          syn.silence();
           droneRef.current.stop();
-        } else if(!g.crossAbove&&S.audioSilenced){
+          loopRef.current.stopAll();
+        } else if(!g.xAbove&&S.audioSilenced){
           S.audioSilenced=false;
+          syn.unsilence();
           droneRef.current.resume();
         }
       }
 
-      // ── Sistema de texto poético — solo desde las manos ───────────
+      // ── Texto poético — SOLO gestos ancla, máx 4 en pantalla ──────
       if(S.poetryOn&&g){
         const arc=S.arc;const motion=g.mt||0;
-        const spdR=g.spd.r||0,spdL=g.spd.l||0;
         if(S.anchorCD>0)S.anchorCD--;
-        if(S.phraseTimer>0)S.phraseTimer--;
-
-        // Frases ancla (gestos específicos)
         if(S.anchorCD<=0){
           let ap=null;
-          if(g.rExt)ap=VIAJAR_PHRASES.find(p=>p.anchor==="rExt"&&p.arc===arc);
-          else if(g.bUp&&!g.rExt)ap=VIAJAR_PHRASES.find(p=>p.anchor==="bUp"&&p.arc===arc);
-          else if(g.lExt)ap=VIAJAR_PHRASES.find(p=>p.anchor==="lExt"&&p.arc===arc);
+          if(g.rExt&&!g.lExt)ap=VIAJAR_PHRASES.find(p=>p.anchor==="rExt"&&p.arc===arc);
+          else if(g.bUp&&!g.rExt&&!g.lExt)ap=VIAJAR_PHRASES.find(p=>p.anchor==="bUp"&&p.arc===arc);
+          else if(g.lExt&&!g.rExt)ap=VIAJAR_PHRASES.find(p=>p.anchor==="lExt"&&p.arc===arc);
           if(ap&&ap.text!==S.lastPhrase){
-            // Spawn desde la mano que hizo el gesto
-            const handJoint=g.rExt?10:g.lExt?9:10;
+            const handJoint=g.rExt?10:g.lExt?9:0;
             const hp=g.lm[handJoint];
-            const hx=hp?(1-hp.x)*W:W/2;
-            const hy=hp?hp.y*H:H/2;
+            const hx=hp?(1-hp.x)*W:W/2;const hy=hp?hp.y*H:H/2;
             particlesRef.current.push(new TextParticle(ap.text,hx,hy,ARC_PALETTES[arc].textColor,arc));
-            if(particlesRef.current.length>10)particlesRef.current.shift();
-            S.lastPhrase=ap.text;S.anchorCD=150;S.phraseTimer=80;
-          }
-        }
-
-        // Frases libres — solo si hay movimiento real en alguna mano
-        if(S.phraseTimer<=0&&(spdR>0.4||spdL>0.4)){
-          const pool=VIAJAR_PHRASES.filter(p=>p.arc===arc&&!p.anchor&&p.text!==S.lastPhrase);
-          if(pool.length){
-            const tw=pool.reduce((s,p)=>s+p.w,0);let r=Math.random()*tw,chosen=pool[0];
-            for(const p of pool){r-=p.w;if(r<=0){chosen=p;break;}}
-            // Spawn desde la mano más activa
-            const activeHand=spdR>=spdL?10:9;
-            const hp=g.lm[activeHand];
-            const hx=hp?(1-hp.x)*W+(Math.random()-0.5)*40:W/2;
-            const hy=hp?hp.y*H+(Math.random()-0.5)*30:H/2;
-            particlesRef.current.push(new TextParticle(chosen.text,hx,hy,ARC_PALETTES[arc].textColor,arc));
-            if(particlesRef.current.length>8)particlesRef.current.shift();
-            S.lastPhrase=chosen.text;
-            // Intervalos más largos — texto escaso y significativo
-            S.phraseTimer={deriva:120,kenopsia:280,apertura:150}[arc]||150;
+            if(particlesRef.current.length>4)particlesRef.current.shift();
+            S.lastPhrase=ap.text;S.anchorCD=220;
           }
         }
         particlesRef.current.forEach(p=>p.update(motion));
@@ -1148,7 +1083,7 @@ export default function App(){
                 <FxS label="Volumen" val={S.synVol} min={0} max={1} step={0.01} onChange={v=>{S.synVol=v;syn.setV(v);tk();}}/>
                 <FxS label="Delay" val={S.synDl} min={0} max={0.8} step={0.01} color={CL[1]} onChange={v=>{S.synDl=v;syn.setDl(v);tk();}}/>
                 <FxS label="Reverb" val={S.synRv} min={0} max={0.8} step={0.01} color={CL[3]} onChange={v=>{S.synRv=v;syn.setRv(v);tk();}}/>
-                <Tog on={S.synOn} label="Sintetizador" onTap={()=>{S.synOn=!S.synOn;if(!S.synOn)syn.relAll();tk();}}/>
+                <Tog on={S.synOn} label="Sintetizador" onTap={()=>{S.synOn=!S.synOn;if(!S.synOn)syn.silence();else syn.unsilence();tk();}}/>
 
                 {/* ── LOOPS ── */}
                 <div style={{borderTop:`2px solid ${bdr}`,paddingTop:10,marginTop:6}}>
