@@ -483,6 +483,11 @@ class Drone{
     this.masterG.connect(rv);rv.connect(this.rvG);this.rvG.connect(this.c.destination);
     this.on=true;
   }
+  // Conectar el drone al compresor del synth para que los loops puedan grabarlo
+  connectToComp(compNode){
+    if(!this.on||!compNode)return;
+    try{this.masterG.connect(compNode);this.rvG.connect(compNode);}catch(e){}
+  }
   setArc(arcName){
     if(!this.on)return;const t=this.c.currentTime;
     this.oscs.forEach(o=>{try{o.g.gain.setTargetAtTime(0,t,0.8);setTimeout(()=>{try{o.o.stop();}catch(e){}},2000);}catch(e){}});
@@ -898,6 +903,7 @@ export default function App(){
       await syRef.current.init();
       samplerRef.current=new SamplePlayer(syRef.current);
       await droneRef.current.init(syRef.current.c);
+      droneRef.current.connectToComp(syRef.current.comp);
       loopRef.current.init(syRef.current.c, syRef.current.comp);
       // Todo arranca en silencio — Mariana activa manualmente
       droneRef.current.stop();
@@ -994,7 +1000,7 @@ export default function App(){
         if(g.rUp&&!g.bUp&&S.tPoseCD<=0){
           if(!S.loopRUpCount)S.loopRUpCount=0;
           S.loopRUpCount++;
-          if(S.loopRUpCount>=8){ // ~0.5s sostenido
+          if(S.loopRUpCount>=20){ // ~1.3s sostenido
             const lr=loopRef.current;
             const loop=lr.loops[S.activeLoopIdx];
             if(loop.recording){lr.stopRecord();}
