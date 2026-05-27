@@ -753,7 +753,7 @@ export default function App(){
     dancer2On:false,dancer2Color:"#F59E0B",dancer2:null,
     shadowOn:true,shadowDelay:0.5,shadowMirror:true,shadowColor:"#F43F5E",shadowRandom:0.3,shadowOpacity:0.6,
     entityColor:"#10B981",entityOpacity:0.85,ghost:0,showOv:true,
-    arc:"deriva",droneOn:true,
+    arc:"deriva",
     poetryOn:true,anchorCD:0,lastPhrase:"",phraseTimer:0,
     icoOn:true,zonesOn:true,
     ghostProjectionOn:false,ghostBgVideoIdx:-1,ghostWorldOp:0.85,
@@ -803,7 +803,8 @@ export default function App(){
       S.melodyAtk=p.synChar.melodyAtk;S.bassAtk=p.synChar.bassAtk;S.chordAtk=p.synChar.chordAtk;
       S.synDl=p.synChar.dl;S.synRv=p.synChar.rv;
     }
-    droneRef.current.setArc(arcId);
+    if(S.droneOn)droneRef.current.setArc(arcId);
+    else droneRef.current.stop();
     particlesRef.current=[];S.phraseTimer=0;S.lastPhrase="";
   };
 
@@ -878,11 +879,10 @@ export default function App(){
       await syRef.current.init();
       samplerRef.current=new SamplePlayer(syRef.current);
       await droneRef.current.init(syRef.current.c);
-      droneRef.current.setArc("deriva");
-      // Inicializar loop recorder conectado al master del synth
       loopRef.current.init(syRef.current.c, syRef.current.m);
-      // Drone y synth arrancan apagados — Mariana los activa manualmente
+      // Todo arranca en silencio — Mariana activa manualmente
       droneRef.current.stop();
+      syRef.current.silence();
       setPhase("running");
     }catch(e){setLoadMsg("Error: "+e.message);}})();
     return()=>{dead=true;};
@@ -1412,7 +1412,7 @@ export default function App(){
                     + Añadir keyframe
                   </div>
                   {S.timelineOn&&<div style={{marginTop:6,padding:"6px 10px",borderRadius:8,background:"#F59E0B10",border:`1px solid #F59E0B30`,fontSize:9,color:"#F59E0B"}}>
-                    ▶ Corriendo: {S.timelineStart?Math.floor(t-S.timelineStart)+"s":"—"}
+                    ▶ Corriendo — activo
                   </div>}
                 </div>
                 {S.shadowOn&&(<>
