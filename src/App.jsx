@@ -367,7 +367,7 @@ export default function App(){
     kenopsia:{
       photoSlots:[{ld:false,nm:"",img:null,op:1},{ld:false,nm:"",img:null,op:1},{ld:false,nm:"",img:null,op:1},{ld:false,nm:"",img:null,op:1}],
       activePhotoIdx:-1,camOp:0.7,droneOn:true,ghostProjectionOn:false,zonesOn:true,
-      textIdx:0,spinCD:0,prevSpinning:false,
+      textIdx:0,spinCD:120,prevSpinning:false,
     },
     apertura:{
       videoSlots:[{ld:false,nm:"",url:null,op:1},{ld:false,nm:"",url:null,op:1},{ld:false,nm:"",url:null,op:1},{ld:false,nm:"",url:null,op:1}],
@@ -380,9 +380,9 @@ export default function App(){
     melodyAtk:0.08,bassAtk:0.08,chordAtk:0.3,
   }).current;
 
-  // refs de vídeos (4 deriva + 4 apertura)
-  const derivaVRefs=[useRef(null),useRef(null),useRef(null),useRef(null)];
-  const aperturaVRefs=[useRef(null),useRef(null),useRef(null),useRef(null)];
+  // refs de vídeos — un solo useRef por grupo para evitar recreación en cada render
+  const derivaVRefsArr=useRef([null,null,null,null]);
+  const aperturaVRefsArr=useRef([null,null,null,null]);
   const kenopsiaImgs=useRef([null,null,null,null]);
 
   const wcRef=useRef(null);const pvRef=useRef(null);const outRef=useRef(null);const bcRef=useRef(null);
@@ -420,8 +420,8 @@ export default function App(){
   const switchScene=(newScene)=>{
     const cur=sceneRef.current;
     // Cerrar vídeo activo saliente
-    if(cur==="deriva"){const d=S.deriva;if(d.activeVideoIdx>=0){const v=derivaVRefs[d.activeVideoIdx]?.current;if(v&&!v.paused)v.pause();d.activeVideoIdx=-1;}}
-    if(cur==="apertura"){const ap=S.apertura;if(ap.activeVideoIdx>=0){const v=aperturaVRefs[ap.activeVideoIdx]?.current;if(v&&!v.paused)v.pause();ap.activeVideoIdx=-1;}ap.timelineStart=null;}
+    if(cur==="deriva"){const d=S.deriva;if(d.activeVideoIdx>=0){const v=derivaVRefsArr.current[d.activeVideoIdx];if(v&&!v.paused)v.pause();d.activeVideoIdx=-1;}}
+    if(cur==="apertura"){const ap=S.apertura;if(ap.activeVideoIdx>=0){const v=aperturaVRefsArr.current[ap.activeVideoIdx];if(v&&!v.paused)v.pause();ap.activeVideoIdx=-1;}ap.timelineStart=null;}
     particlesRef.current=[];
     setScene(newScene);
     applyArc(newScene);
@@ -435,13 +435,13 @@ export default function App(){
     const targets=[g.lExt,g.rExt,g.bUp,g.vD];
     const newIdx=targets.findIndex(Boolean);
     if(crossChestCD.current<=0&&g.crossChest){
-      if(d.activeVideoIdx>=0){const v=derivaVRefs[d.activeVideoIdx]?.current;if(v&&!v.paused)v.pause();d.activeVideoIdx=-1;}
+      if(d.activeVideoIdx>=0){const v=derivaVRefsArr.current[d.activeVideoIdx];if(v&&!v.paused)v.pause();d.activeVideoIdx=-1;}
       crossChestCD.current=40;
     }else if(newIdx>=0&&newIdx!==d.activeVideoIdx){
       // cerrar el anterior
-      if(d.activeVideoIdx>=0){const vOld=derivaVRefs[d.activeVideoIdx]?.current;if(vOld&&!vOld.paused)vOld.pause();}
+      if(d.activeVideoIdx>=0){const vOld=derivaVRefsArr.current[d.activeVideoIdx];if(vOld&&!vOld.paused)vOld.pause();}
       // abrir el nuevo si está cargado
-      if(d.videoSlots[newIdx].ld){const vNew=derivaVRefs[newIdx]?.current;if(vNew&&vNew.paused)vNew.play().catch(()=>{});d.activeVideoIdx=newIdx;}
+      if(d.videoSlots[newIdx].ld){const vNew=derivaVRefsArr.current[newIdx];if(vNew&&vNew.paused)vNew.play().catch(()=>{});d.activeVideoIdx=newIdx;}
     }
     // Sintetizador
     if(d.synOn){
@@ -482,11 +482,11 @@ export default function App(){
     const targets=[g.lExt,g.rExt,g.bUp,g.vD];
     const newVidIdx=targets.findIndex(Boolean);
     if(crossChestCD.current<=0&&g.crossChest){
-      if(ap.activeVideoIdx>=0){const v=aperturaVRefs[ap.activeVideoIdx]?.current;if(v&&!v.paused)v.pause();ap.activeVideoIdx=-1;}
+      if(ap.activeVideoIdx>=0){const v=aperturaVRefsArr.current[ap.activeVideoIdx];if(v&&!v.paused)v.pause();ap.activeVideoIdx=-1;}
       crossChestCD.current=40;
     }else if(newVidIdx>=0&&newVidIdx!==ap.activeVideoIdx){
-      if(ap.activeVideoIdx>=0){const vOld=aperturaVRefs[ap.activeVideoIdx]?.current;if(vOld&&!vOld.paused)vOld.pause();}
-      if(ap.videoSlots[newVidIdx].ld){const vNew=aperturaVRefs[newVidIdx]?.current;if(vNew&&vNew.paused)vNew.play().catch(()=>{});ap.activeVideoIdx=newVidIdx;}
+      if(ap.activeVideoIdx>=0){const vOld=aperturaVRefsArr.current[ap.activeVideoIdx];if(vOld&&!vOld.paused)vOld.pause();}
+      if(ap.videoSlots[newVidIdx].ld){const vNew=aperturaVRefsArr.current[newVidIdx];if(vNew&&vNew.paused)vNew.play().catch(()=>{});ap.activeVideoIdx=newVidIdx;}
     }
     // Loops: bUp→0, lExt→1, rExt→2, vD→3
     if(ap.loopOn){
@@ -534,9 +534,29 @@ export default function App(){
   const stopRec=()=>{if(recRef.current?.state==="recording")recRef.current.stop();recRef.current=null;setRecording(false);clearInterval(recTimer.current);};
 
   // ── Carga de media ────────────────────────────────────────────────────
-  const loadDerivaVideo=(file,i)=>{const r=derivaVRefs[i];if(!r?.current)return;if(S.deriva.videoSlots[i].url)URL.revokeObjectURL(S.deriva.videoSlots[i].url);const url=URL.createObjectURL(file);r.current.src=url;r.current.loop=true;r.current.muted=true;r.current.pause();S.deriva.videoSlots[i]={ld:true,nm:file.name,url,op:S.deriva.videoSlots[i].op};tk();};
-  const loadKenopsiaPhoto=(file,i)=>{const img=new Image();img.onload=()=>{kenopsiaImgs.current[i]=img;S.kenopsia.photoSlots[i]={ld:true,nm:file.name,img,op:S.kenopsia.photoSlots[i].op};tk();};img.src=URL.createObjectURL(file);};
-  const loadAperturaVideo=(file,i)=>{const r=aperturaVRefs[i];if(!r?.current)return;if(S.apertura.videoSlots[i].url)URL.revokeObjectURL(S.apertura.videoSlots[i].url);const url=URL.createObjectURL(file);r.current.src=url;r.current.loop=true;r.current.muted=true;r.current.pause();S.apertura.videoSlots[i]={ld:true,nm:file.name,url,op:S.apertura.videoSlots[i].op};tk();};
+  const loadDerivaVideo=(file,i)=>{
+    const v=derivaVRefsArr.current[i];
+    if(!v)return;
+    if(S.deriva.videoSlots[i].url)URL.revokeObjectURL(S.deriva.videoSlots[i].url);
+    const url=URL.createObjectURL(file);
+    v.src=url;v.loop=true;v.muted=true;v.load();
+    S.deriva.videoSlots[i].ld=true;S.deriva.videoSlots[i].nm=file.name;S.deriva.videoSlots[i].url=url;
+    tk();
+  };
+  const loadKenopsiaPhoto=(file,i)=>{
+    const img=new Image();
+    img.onload=()=>{kenopsiaImgs.current[i]=img;S.kenopsia.photoSlots[i].ld=true;S.kenopsia.photoSlots[i].nm=file.name;tk();};
+    img.src=URL.createObjectURL(file);
+  };
+  const loadAperturaVideo=(file,i)=>{
+    const v=aperturaVRefsArr.current[i];
+    if(!v)return;
+    if(S.apertura.videoSlots[i].url)URL.revokeObjectURL(S.apertura.videoSlots[i].url);
+    const url=URL.createObjectURL(file);
+    v.src=url;v.loop=true;v.muted=true;v.load();
+    S.apertura.videoSlots[i].ld=true;S.apertura.videoSlots[i].nm=file.name;S.apertura.videoSlots[i].url=url;
+    tk();
+  };
 
   // ── Init ──────────────────────────────────────────────────────────────
   useEffect(()=>{if(phase!=="loading")return;let dead=false;
@@ -638,8 +658,8 @@ export default function App(){
         if(d.icoOn&&g?.lm)drawIcosahedron(ctx,g.lm,W,H,getIcoColor(t),t,g.mt||0);
         // 2. Vídeo activo — 100% pantalla
         if(d.activeVideoIdx>=0){
-          const slot=d.videoSlots[d.activeVideoIdx];const vr=derivaVRefs[d.activeVideoIdx]?.current;
-          if(slot.ld&&vr&&vr.readyState>=1){ctx.save();ctx.globalAlpha=slot.op;ctx.translate(W,0);ctx.scale(-1,1);ctx.drawImage(vr,0,0,W,H);ctx.restore();}
+          const slot=d.videoSlots[d.activeVideoIdx];const vr=derivaVRefsArr.current[d.activeVideoIdx];
+          if(slot.ld&&vr&&vr.readyState>=2){ctx.save();ctx.globalAlpha=slot.op;ctx.translate(W,0);ctx.scale(-1,1);ctx.drawImage(vr,0,0,W,H);ctx.restore();}
         }
         // 3. Cámara
         drawCam(d.camOp,"screen");
@@ -690,8 +710,8 @@ export default function App(){
         }
         // 2. Vídeo de efectos activo
         if(ap.activeVideoIdx>=0){
-          const slot=ap.videoSlots[ap.activeVideoIdx];const vr=aperturaVRefs[ap.activeVideoIdx]?.current;
-          if(slot.ld&&vr&&vr.readyState>=1){ctx.save();ctx.globalAlpha=slot.op*0.7;ctx.globalCompositeOperation="screen";ctx.translate(W,0);ctx.scale(-1,1);ctx.drawImage(vr,0,0,W,H);ctx.restore();}
+          const slot=ap.videoSlots[ap.activeVideoIdx];const vr=aperturaVRefsArr.current[ap.activeVideoIdx];
+          if(slot.ld&&vr&&vr.readyState>=2){ctx.save();ctx.globalAlpha=slot.op*0.7;ctx.globalCompositeOperation="screen";ctx.translate(W,0);ctx.scale(-1,1);ctx.drawImage(vr,0,0,W,H);ctx.restore();}
         }
         // 3. Entidad fluida
         if(g?.lm)drawFluid(ctx,g.lm,W,H,palette.entityColor,S.entityOpacity,t,g.mt||0);
@@ -700,7 +720,7 @@ export default function App(){
         // 5. Mundo paralelo
         if(ap.ghostProjectionOn&&ghostCanvasRef.current){
           const gc=ghostCanvasRef.current.getContext("2d");shRef.current.extrap=false;
-          drawGhostWorld(gc,960,540,shRef.current,t,palette,ap.activeVideoIdx>=0?aperturaVRefs[ap.activeVideoIdx]?.current:null,0.9,true);
+          drawGhostWorld(gc,960,540,shRef.current,t,palette,ap.activeVideoIdx>=0?aperturaVRefsArr.current[ap.activeVideoIdx]:null,0.9,true);
         }
       }
 
@@ -866,8 +886,15 @@ export default function App(){
             </div>
             <label style={{display:"block",padding:"6px",border:`1px dashed ${info.color}40`,borderRadius:6,cursor:"pointer",textAlign:"center",fontSize:9,color:has?info.color:txS}}>
               {has?"✓ Sample cargado":"Cargar .mp3 / .wav"}
-              <input type="file" accept="audio/*" style={{display:"none"}} onChange={async e=>{const f=e.target.files[0];if(!f||!samplerRef.current)return;if(await samplerRef.current.loadSample(role,f))tk();}}/>
-            </label>
+              <input type="file" accept="audio/*" style={{display:"none"}} onChange={async e=>{
+                const f=e.target.files[0];if(!f)return;
+                const syn=syRef.current;
+                // Asegurar que el AudioContext está activo
+                if(syn.c&&syn.c.state==="suspended")await syn.c.resume();
+                if(!samplerRef.current){samplerRef.current=new SamplePlayer(syn);}
+                const ok=await samplerRef.current.loadSample(role,f);
+                if(ok)tk();
+              }}/>            </label>
           </div>);
         })}
       </div>
@@ -1051,10 +1078,10 @@ export default function App(){
         </div>
       </div>)}
 
-      {/* Vídeos ocultos Deriva */}
-      {derivaVRefs.map((r,i)=>(<video key={`dv${i}`} ref={r} muted loop playsInline preload="auto" style={{position:"fixed",top:-9999,left:-9999,width:1,height:1,opacity:0,pointerEvents:"none"}}/>))}
+      {/* Vídeos ocultos Deriva — ref callback pobla el array */}
+      {[0,1,2,3].map(i=>(<video key={`dv${i}`} ref={el=>{derivaVRefsArr.current[i]=el;}} muted loop playsInline preload="auto" style={{position:"fixed",top:-9999,left:-9999,width:1,height:1,opacity:0,pointerEvents:"none"}}/>))}
       {/* Vídeos ocultos Apertura */}
-      {aperturaVRefs.map((r,i)=>(<video key={`av${i}`} ref={r} muted loop playsInline preload="auto" style={{position:"fixed",top:-9999,left:-9999,width:1,height:1,opacity:0,pointerEvents:"none"}}/>))}
+      {[0,1,2,3].map(i=>(<video key={`av${i}`} ref={el=>{aperturaVRefsArr.current[i]=el;}} muted loop playsInline preload="auto" style={{position:"fixed",top:-9999,left:-9999,width:1,height:1,opacity:0,pointerEvents:"none"}}/>))}
       <canvas ref={bcRef} style={{display:"none"}}/>
     </div>
   );
